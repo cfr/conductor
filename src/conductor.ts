@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { dirname, join } from 'node:path';
 import { ClaudeAdapter } from './agents/claude.ts';
 import { OpencodeAdapter } from './agents/opencode.ts';
-import type { Adapter, AgentSession, Asker, Question } from './agents/types.ts';
+import type { Adapter, AgentSession, Asker, Question, TurnResult, UnsolicitedEvent } from './agents/types.ts';
 import {
     fill,
     loadProjectConfig,
@@ -27,6 +27,7 @@ const roles: readonly string[] = ['implement', 'review', 'plan'];
 const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /review [agent] [id] - review the current task (or a task done outside the conductor)
 /fix [notes] - reviewer applies fixes and commits
+/gate - run the gate on the current session's commits now, then continue as after a turn
 /todo [id] - list PLAN.md "Next" items (or show one in full)
 /plan [agent] [topic] - planning discussion (edits PLAN.md only)
 /plan done - write the agreed items, then commit / keep / discard
@@ -71,6 +72,7 @@ export class Conductor {
         chat.command('next', (a) => this.nextTask(a));
         chat.command('review', (a) => this.review(a));
         chat.command('fix', (a) => this.fix(a));
+        chat.command('gate', () => this.gateCommand());
         chat.command('plan', (a) => this.plan(a));
         chat.command('todo', (a) => this.todo(a));
         chat.command('agents', async () => chat.send(this.agentList()));
@@ -78,6 +80,16 @@ export class Conductor {
         chat.command('stop', () => this.stop());
         chat.command('log', () => this.exportAll());
         chat.onText = (text, route) => this.text(text, route as Role | undefined);
+        for (const adapter of Object.values(this.adapters)) {
+            adapter.onUnsolicited = (id, ev) => this.detach(this.unsolicited(id, ev));
+        }
+        for (const role of Object.keys(this.state.sessions) as Role[]) {
+            try {
+                this.session(role);
+            } catch (e) {
+                console.error(`resume ${role}:`, (e as Error).message);
+            }
+        }
     }
 
     private help(): string {
@@ -453,34 +465,97 @@ export class Conductor {
         await this.turn(role, text, 'working');
     }
 
+    private detach(p: Promise<void>) {
+        p.catch((e: Error) => {
+            console.error(e);
+            void this.chat.send(`error: ${e.message}`);
+        });
+    }
+
     private async turn(role: Role, text: string, doing: string, gateAttempt = 0) {
         this.claim(role);
         await this.chat.send(`${this.prefix(role)} ${doing}…`, role);
-        let committed = false;
-        let before = '';
+        let gateFrom: string | undefined;
         try {
-            const s = this.session(role);
-            before = await repo.head(this.project.root);
-            const r = await s.send(text);
-            await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
-            const p = this.prefix(role);
-            if (r.text) {
-                await this.chat.sendMarkdown(p, r.text, role);
-            }
-            if (r.outcome !== 'succeeded') {
-                await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}`, role);
-                return;
-            }
-            committed = (await repo.commitsSince(this.project.root, before)).length > 0;
-            if (role === 'plan') {
-                await this.checkPlanOnly();
-            }
+            const r = await this.session(role).send(text);
+            gateFrom = await this.settle(role, r);
         } finally {
             this.busy = null;
         }
-        if (committed && role !== 'plan') {
-            await this.gate(role, before, gateAttempt);
+        if (gateFrom !== undefined) {
+            await this.gate(role, gateFrom, gateAttempt);
         }
+    }
+
+    // Returns the commit to gate from when the session committed since it was last checked.
+    private async settle(role: Role, r: TurnResult): Promise<string | undefined> {
+        await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
+        const p = this.prefix(role);
+        if (r.text) {
+            await this.chat.sendMarkdown(p, r.text, role);
+        }
+        if (r.outcome !== 'succeeded') {
+            await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}`, role);
+            return undefined;
+        }
+        const root = this.project.root;
+        const ref = this.state.sessions[role]!;
+        const from = ref.checkedSha ?? ref.startSha;
+        const committed = (await repo.commitsSince(root, from)).length > 0;
+        ref.checkedSha = await repo.head(root);
+        this.store.save();
+        if (role === 'plan') {
+            await this.checkPlanOnly();
+            return undefined;
+        }
+        return committed ? from : undefined;
+    }
+
+    private async unsolicited(sessionId: string, ev: UnsolicitedEvent) {
+        const role = (Object.keys(this.state.sessions) as Role[]).find((r) => this.state.sessions[r]?.id === sessionId);
+        if (!role) {
+            return;
+        }
+        const p = this.prefix(role);
+        if (ev.phase === 'started') {
+            await this.chat.send(`${p} resumed on its own (e.g. a background job finished)…`, role);
+            return;
+        }
+        if (this.busy) {
+            await this.chat.send(`${p} finished a turn it started itself; ${this.busy} is running, so its commits are checked after the next turn`, role);
+            return;
+        }
+        this.claim(role);
+        let gateFrom: string | undefined;
+        try {
+            const text = await this.session(role).lastReply();
+            gateFrom = await this.settle(role, { outcome: ev.outcome, error: ev.error, text });
+        } finally {
+            this.busy = null;
+        }
+        if (gateFrom !== undefined) {
+            await this.gate(role, gateFrom, 0);
+        }
+    }
+
+    private async gateCommand() {
+        const role = this.state.focus;
+        const ref = role ? this.state.sessions[role] : undefined;
+        if (!role || !ref || role === 'plan') {
+            await this.chat.send('no implementation or review session to gate');
+            return;
+        }
+        const root = this.project.root;
+        if ((await repo.commitsSince(root, ref.startSha)).length === 0) {
+            await this.chat.send(`${this.prefix(role)} has no commits since its session started`);
+            return;
+        }
+        if (this.busy) {
+            throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
+        }
+        ref.checkedSha = await repo.head(root);
+        this.store.save();
+        await this.gate(role, ref.startSha, 0);
     }
 
     private async checkPlanOnly() {

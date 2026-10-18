@@ -111,6 +111,14 @@ class ClaudeSession implements AgentSession {
         return result;
     }
 
+    async lastReply(): Promise<string> {
+        const t = readClaudeTranscript(this.id);
+        const last = t?.messages.filter((m) => m.role === 'assistant').pop();
+        return (last?.parts ?? [])
+            .flatMap((p) => (p.kind === 'text' && p.text.trim() ? [p.text] : []))
+            .join('\n\n');
+    }
+
     async interrupt(): Promise<void> {
         this.abort?.abort();
     }

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import type { AgentConfig } from '../config.ts';
 import { fromOpencode, type OcExport } from '../logs/opencode.ts';
 import type { Transcript } from '../logs/markdown.ts';
-import type { Adapter, AgentSession, Asker, SessionOptions, TurnResult } from './types.ts';
+import type { Adapter, AgentSession, Asker, SessionOptions, TurnResult, UnsolicitedEvent } from './types.ts';
 
 interface OcEvent {
     type: string;
@@ -34,6 +34,7 @@ export class OpencodeAdapter implements Adapter {
     private askers = new Map<string, Asker>();
     private streaming = false;
     private url: string;
+    onUnsolicited?: (sessionId: string, event: UnsolicitedEvent) => void;
 
     constructor(url: string) {
         this.url = url;
@@ -113,10 +114,21 @@ export class OpencodeAdapter implements Adapter {
         if (!sid) {
             return;
         }
+        const tracked = this.askers.has(sid);
+        const waiter = this.waiters.get(sid);
+        // opencode resumes a session by itself, e.g. when a background shell job finishes
+        if (ev.type === 'session.execution.started' && tracked && !waiter) {
+            this.onUnsolicited?.(sid, { phase: 'started' });
+            return;
+        }
         const outcome = endEvents[ev.type];
         if (outcome) {
             const err = data.error as { message?: string } | undefined;
-            this.waiters.get(sid)?.resolve({ outcome, error: err?.message });
+            if (waiter) {
+                waiter.resolve({ outcome, error: err?.message });
+            } else if (tracked) {
+                this.onUnsolicited?.(sid, { phase: 'ended', outcome, error: err?.message });
+            }
             return;
         }
         const asker = this.askers.get(sid);
@@ -254,6 +266,10 @@ class OpencodeSession implements AgentSession {
         );
         const r = await end;
         return { ...r, text: await this.replyAfter(sent.data.id) };
+    }
+
+    lastReply(): Promise<string> {
+        return this.replyAfter('');
     }
 
     private async replyAfter(userMessageId: string): Promise<string> {

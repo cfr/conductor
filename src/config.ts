@@ -26,7 +26,7 @@ export interface ProjectCommand {
 }
 
 export const builtinCommands = [
-    'help', 'start', 'next', 'review', 'fix', 'todo', 'plan', 'agents', 'status', 'stop', 'log',
+    'help', 'start', 'next', 'review', 'fix', 'gate', 'todo', 'plan', 'agents', 'status', 'stop', 'log',
 ];
 
 export interface GateStep {

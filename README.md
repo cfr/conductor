@@ -36,6 +36,13 @@ Then `/help` in the chat. The usual loop:
 - `/review [agent] <id>` reviews work done outside the conductor, e.g. a task GLM finished in the
   TUI
 - plain text goes to the current session; reply to an agent's message to reach that session
+- `/gate` runs the gate on the current session's commits by hand and continues from there (the
+  review starts after an implementation), e.g. after fixing something yourself
+
+When opencode resumes a session by itself (a background job the agent started finished), the
+conductor posts that and handles the end of that turn like any other: reply, log, gate, review.
+Commits are checked against the last commit the conductor saw for the session, so a commit made
+in a turn it missed is still picked up at the end of the next one.
 
 `/todo` lists the `PLAN.md` "Next" items (`/todo <id>` shows one in full) without an agent.
 `/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` writes the

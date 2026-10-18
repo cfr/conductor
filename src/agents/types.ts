@@ -36,11 +36,17 @@ export interface AgentSession {
     readonly id: string;
     readonly agent: AgentConfig;
     send(text: string): Promise<TurnResult>;
+    lastReply(): Promise<string>;
     interrupt(): Promise<void>;
     transcript(): Promise<Transcript | undefined>;
 }
 
+export type UnsolicitedEvent =
+    | { phase: 'started' }
+    | { phase: 'ended'; outcome: TurnResult['outcome']; error?: string };
+
 export interface Adapter {
+    onUnsolicited?: (sessionId: string, event: UnsolicitedEvent) => void;
     create(agent: AgentConfig, opts: SessionOptions): Promise<AgentSession>;
     resume(agent: AgentConfig, id: string, opts: SessionOptions): AgentSession;
 }

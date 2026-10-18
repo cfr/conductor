@@ -8,6 +8,7 @@ export interface SessionRef {
     id: string;
     title: string;
     startSha: string;
+    checkedSha?: string;
     logFile?: string;
 }
 
