@@ -535,6 +535,15 @@ export class Conductor {
 
     async announce() {
         const s = this.state;
-        await this.chat.send(`conductor up: ${this.project.root}${s.task ? `, task ${s.task.id}` : ''}. /help`);
+        const text = `conductor up: ${this.project.root}${s.task ? `, task ${s.task.id}` : ''}. /help`;
+        const commands = new Map<string, string>();
+        for (const line of help.split('\n')) {
+            const m = /^\/([a-z-]+)\b.*? - (.*)$/.exec(line);
+            if (m && !commands.has(m[1])) {
+                commands.set(m[1].replace(/-/g, '_'), m[2].slice(0, 256));
+            }
+        }
+        commands.set('help', 'commands');
+        await this.chat.takeOver(text, [...commands].map(([command, description]) => ({ command, description })));
     }
 }

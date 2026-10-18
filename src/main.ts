@@ -22,5 +22,5 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 
 await chat.start(() => {
     console.log(`conductor: polling Telegram for ${local.project}`);
-    void conductor.announce();
+    conductor.announce().catch((e: Error) => console.error('announce:', e.message));
 });

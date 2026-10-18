@@ -13,6 +13,7 @@ export interface Messenger {
     sendFile(name: string, content: string, caption?: string, route?: string): Promise<void>;
     ask(text: string, choices: string[], allowText: boolean): Promise<string>;
     pendingQuestions(): number;
+    takeOver(text: string, commands: { command: string; description: string }[]): Promise<void>;
 }
 
 interface Pending {
@@ -155,6 +156,11 @@ export class Chat implements Messenger {
 
     pendingQuestions(): number {
         return this.pending.length;
+    }
+
+    async takeOver(text: string, commands: { command: string; description: string }[]) {
+        await this.bot.api.setMyCommands(commands);
+        await this.bot.api.sendMessage(this.userId, text, { reply_markup: { remove_keyboard: true } });
     }
 
     async start(onStart: () => void) {
