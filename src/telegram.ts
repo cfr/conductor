@@ -205,6 +205,8 @@ export class Chat implements Messenger {
 
     async takeOver(text: string, commands: { command: string; description: string }[]) {
         await this.bot.api.setMyCommands(commands);
+        // a chat-scoped list (another bot sets one) overrides the default list in this chat
+        await this.bot.api.setMyCommands(commands, { scope: { type: 'chat', chat_id: this.userId } });
         await this.bot.api.setChatMenuButton({ menu_button: { type: 'commands' } });
         await this.bot.api.setChatMenuButton({ chat_id: this.userId, menu_button: { type: 'commands' } });
         await this.bot.api.sendMessage(this.userId, text, { reply_markup: { remove_keyboard: true } });
