@@ -42,3 +42,8 @@ export function parseNext(plan: string): PlanItem[] {
 export function idNumber(id: string): string {
     return /^(\d{4})/.exec(id)?.[1] ?? id;
 }
+
+export function summary(item: PlanItem): string {
+    const first = item.text.split('\n')[0].replace(/^- \d{4}-[a-z0-9-]+:\s*/, '');
+    return `${item.id}: ${first}`;
+}

@@ -12,7 +12,7 @@ import {
     type Role,
 } from './config.ts';
 import { renderMarkdown } from './logs/markdown.ts';
-import { idNumber, parseNext, type PlanItem } from './plan.ts';
+import { idNumber, parseNext, summary, type PlanItem } from './plan.ts';
 import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
 import type { SessionRef, Store } from './state.ts';
@@ -23,6 +23,7 @@ type Busy = Role | 'gate' | null;
 const help = `/next-task [agent] [id] - start the next PLAN item (or a given one)
 /review [agent] [id] - review the current task (or a task done outside the conductor)
 /fix [notes] - reviewer applies fixes and commits
+/todo [id] - list PLAN.md "Next" items (or show one in full)
 /plan [agent] [topic] - planning discussion (edits PLAN.md only)
 /plan done - write the agreed items, then commit / keep / discard
 /agents - configured agents and role defaults
@@ -63,6 +64,7 @@ export class Conductor {
         chat.command('review', (a) => this.review(a));
         chat.command('fix', (a) => this.fix(a));
         chat.command('plan', (a) => this.plan(a));
+        chat.command('todo', (a) => this.todo(a));
         chat.command('agents', async () => chat.send(this.agentList()));
         chat.command('status', async () => chat.send(this.status()));
         chat.command('stop', () => this.stop());
@@ -216,6 +218,17 @@ export class Conductor {
             this.busy = null;
         }
         await this.turn('implement', fill(this.project.prompts.implement, this.vars()));
+    }
+
+    private async todo(args: string) {
+        const items = parseNext(readFileSync(join(this.project.root, 'PLAN.md'), 'utf8'));
+        const id = args.trim();
+        if (id) {
+            const item = items.find((i) => i.id === id || i.number === idNumber(id));
+            await this.chat.send(item ? item.text : `no PLAN item ${id}`);
+            return;
+        }
+        await this.chat.send(items.length ? items.map(summary).join('\n\n') : 'PLAN.md "Next" is empty');
     }
 
     private vars(extra: Record<string, string> = {}): Record<string, string> {

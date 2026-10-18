@@ -37,6 +37,7 @@ Then `/help` in the chat. The usual loop:
   TUI
 - plain text goes to the current session; reply to an agent's message to reach that session
 
+`/todo` lists the `PLAN.md` "Next" items (`/todo <id>` shows one in full) without an agent.
 `/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` writes the
 items and offers commit / keep / discard. `/status`, `/stop`, `/agents` and `/log` do what they
 say.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseNext } from '../src/plan.ts';
+import { parseNext, summary } from '../src/plan.ts';
 import { chunk } from '../src/telegram.ts';
 
 const plan = `# plan
@@ -28,6 +28,7 @@ test('parses Next items with continuation lines', () => {
     assert.equal(items[0].number, '0048');
     assert.match(items[0].text, /Files: `a.cpp`$/);
     assert.equal(items[1].text, '- 0049-antlion-flick: flicks sand');
+    assert.equal(summary(items[0]), '0048-antlion: a fixed ambusher');
 });
 
 test('chunks long text at newlines', () => {
