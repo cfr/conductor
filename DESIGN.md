@@ -183,9 +183,11 @@ one chat stays readable.
 ## Planning discussion
 
 `/plan [agent] [topic]` opens a session (default `roles.plan`) that may read the repo and edit
-only `PLAN.md` (no code, no commits). The conversation runs in the chat like any other session.
-`/plan done` asks the agent to write the agreed items into `PLAN.md`; the bridge posts the
-`PLAN.md` diff and offers commit / keep uncommitted / discard.
+only `PLAN.md` (no code; it commits only on `/plan done`). The conversation runs in the chat like any other session.
+`/plan done` asks the agent to write the agreed items into `PLAN.md` and commit it (the agent
+knows what changed and follows the project's commit rules); the bridge posts the commit message
+and diff, warns if the commit touches more than `PLAN.md`, and offers keep / undo commit (`git
+reset --keep`, only while HEAD is still that commit).
 
 ## Shape
 

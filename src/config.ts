@@ -75,7 +75,9 @@ const defaultPrompts: Prompts = {
     plan:
         'Planning discussion{topic}. You may read the repository, but edit only PLAN.md: no code ' +
         'changes and no commits. Discuss with me first; I will say when to write the items down.',
-    planDone: 'Please write the agreed items into PLAN.md now. Do not commit.',
+    planDone:
+        'Please write the agreed items into PLAN.md now and commit only PLAN.md, following the ' +
+        "project's commit message rules.",
 };
 
 export function expandHome(p: string): string {

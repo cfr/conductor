@@ -45,8 +45,9 @@ Commits are checked against the last commit the conductor saw for the session, s
 in a turn it missed is still picked up at the end of the next one.
 
 `/todo` lists the `PLAN.md` "Next" items (`/todo <id>` shows one in full) without an agent.
-`/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` writes the
-items and offers commit / keep / discard. `/status`, `/stop`, `/agents` and `/log` do what they
+`/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` has the
+agent write the items and commit `PLAN.md` with a message following the project's rules, then
+shows the commit and offers to undo it. `/status`, `/stop`, `/agents` and `/log` do what they
 say.
 
 Project commands come from `[commands.<name>]` in `CONDUCTOR.md` (`cmd`, `description`,

@@ -435,25 +435,34 @@ export class Conductor {
             await this.chat.send('no planning session; /plan first');
             return;
         }
-        await this.turn('plan', this.project.prompts.planDone, 'writing PLAN.md');
         const root = this.project.root;
-        const d = await repo.fileDiff(root, 'PLAN.md');
-        if (!d.trim()) {
-            await this.chat.send('PLAN.md is unchanged');
+        const before = await repo.head(root);
+        await this.turn('plan', this.project.prompts.planDone, 'writing and committing PLAN.md');
+        const commits = await repo.commitsSince(root, before);
+        if (commits.length === 0) {
+            const dirty = (await repo.fileDiff(root, 'PLAN.md')).trim();
+            await this.chat.send(dirty ? 'PLAN.md changed but nothing was committed' : 'no commit; PLAN.md is unchanged');
             return;
         }
-        await this.chat.sendFile('PLAN.diff', d, 'PLAN.md changes');
-        const topic = this.state.planTopic ?? 'next';
-        const num = this.state.task?.number;
-        const message = `Plan ${topic}${num ? ` #${num}` : ''}`;
-        const a = await this.chat.ask(`PLAN.md: commit as "${message}"?`, ['commit', 'keep uncommitted', 'discard'], false);
-        if (a === 'commit') {
-            await git(root, 'commit', '-m', message, '--', 'PLAN.md');
-            await this.chat.send(`committed ${(await repo.head(root)).slice(0, 7)}`);
-        } else if (a === 'discard') {
-            await git(root, 'checkout', '--', 'PLAN.md');
-            await this.chat.send('PLAN.md changes discarded');
+        const files = (await git(root, 'diff', '--name-only', before, 'HEAD')).split('\n').filter(Boolean);
+        const others = files.filter((f) => f !== 'PLAN.md');
+        await this.chat.send(
+            [
+                await repo.commitMessages(root, before),
+                ...(others.length ? ['', `warning: the commit also touches ${others.join(', ')}`] : []),
+            ].join('\n'),
+        );
+        await this.chat.sendFile('PLAN.diff', await repo.diff(root, before), 'PLAN.md changes');
+        if ((await this.chat.ask('Keep the planning commit?', ['keep', 'undo commit'], false)) !== 'undo commit') {
+            return;
         }
+        if ((await repo.head(root)) !== commits[0]) {
+            await this.chat.send('HEAD moved since the planning commit; undo it by hand');
+            return;
+        }
+        // --keep refuses instead of overwriting uncommitted changes to the same files
+        await git(root, 'reset', '--keep', before);
+        await this.chat.send(`planning commit undone; HEAD is back at ${before.slice(0, 7)}`);
     }
 
     private async text(text: string, route: Role | undefined) {
