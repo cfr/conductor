@@ -216,7 +216,7 @@ export class Conductor {
         } finally {
             this.busy = null;
         }
-        await this.turn('implement', fill(this.project.prompts.implement, this.vars()));
+        await this.turn('implement', fill(this.project.prompts.implement, this.vars()), `implementing ${item.id}`);
     }
 
     private async todo(args: string) {
@@ -286,7 +286,7 @@ export class Conductor {
         } finally {
             this.busy = null;
         }
-        await this.turn('review', fill(this.project.prompts.review, this.vars()));
+        await this.turn('review', fill(this.project.prompts.review, this.vars()), `reviewing ${task.id}`);
     }
 
     private async fix(notes: string) {
@@ -297,7 +297,7 @@ export class Conductor {
         const p = this.project.prompts;
         const text = notes ? fill(p.fixNotes, this.vars({ notes })) : fill(p.fix, this.vars());
         this.state.focus = 'review';
-        await this.turn('review', text);
+        await this.turn('review', text, `fixing ${this.state.task?.id ?? 'review findings'}`);
     }
 
     private async plan(args: string) {
@@ -320,7 +320,7 @@ export class Conductor {
             this.busy = null;
         }
         const t = rest ? `: ${rest}` : '';
-        await this.turn('plan', fill(this.project.prompts.plan, this.vars({ topic: t })));
+        await this.turn('plan', fill(this.project.prompts.plan, this.vars({ topic: t })), `planning ${topic}`);
     }
 
     private async planDone() {
@@ -328,7 +328,7 @@ export class Conductor {
             await this.chat.send('no planning session; /plan first');
             return;
         }
-        await this.turn('plan', this.project.prompts.planDone);
+        await this.turn('plan', this.project.prompts.planDone, 'writing PLAN.md');
         const root = this.project.root;
         const d = await repo.fileDiff(root, 'PLAN.md');
         if (!d.trim()) {
@@ -355,11 +355,12 @@ export class Conductor {
             await this.chat.send('no session to talk to; /next, /review or /plan');
             return;
         }
-        await this.turn(role, text);
+        await this.turn(role, text, 'working');
     }
 
-    private async turn(role: Role, text: string, gateAttempt = 0) {
+    private async turn(role: Role, text: string, doing: string, gateAttempt = 0) {
         this.claim(role);
+        await this.chat.send(`${this.prefix(role)} ${doing}…`, role);
         let committed = false;
         let before = '';
         try {
@@ -415,9 +416,8 @@ export class Conductor {
         if (!g.ok) {
             await this.chat.sendFile('gate.log', g.log, `gate failed at ${g.failedStep} (${g.seconds.toFixed(0)} s)`);
             if (attempt === 0) {
-                await this.chat.send(`${this.prefix(role)} handing the failure back once`);
                 const text = fill(this.project.prompts.gateFailed, this.vars({ step: g.failedStep ?? '', output: tail(g.log, 60) }));
-                await this.turn(role, text, 1);
+                await this.turn(role, text, `fixing the gate failure`, 1);
             } else {
                 await this.chat.send('gate failed twice; waiting for you (plain text to the agent, or fix it yourself and /review)');
             }
