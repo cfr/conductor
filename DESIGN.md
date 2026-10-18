@@ -130,8 +130,9 @@ idle, so `wlog/` is always current, even for a task that is abandoned halfway. T
 
 - `<step>` is empty for the implementation session, `review` for review and fixes, and
   `review-plan` when the review session also edited `PLAN.md` (a `/plan` discussion inside
-  the review, which is what `-review-plan-` means in today's names). A standalone `/plan`
-  session writes `wlog/plan-<date>-<topic>-<tag>.md`.
+  the review, which is what `-review-plan-` means in today's names). A `/plan` session
+  writes `wlog/<task-id>-plan-<tag>.md`, or `wlog/plan-<date>-<topic>-<tag>.md` when there is no
+  current task.
 - `<tag>` is the agent's `tag` from the config.
 - A second session for the same step (a review restarted with another agent) gets its own file
   through its different suffix; a restart with the same agent overwrites the file, and the

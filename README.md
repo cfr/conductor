@@ -60,7 +60,8 @@ Agent replies are rendered from markdown to Telegram HTML (headings, bold, code 
 links, quotes, tables as preformatted text); a chunk Telegram rejects is resent as plain text.
 
 Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-review[-plan]-<tag>.md`
-and `<task-id>-plan-<tag>.md` (`plan-<date>-<topic>-<tag>.md` with no current task), in opencode's `/export` layout for both harnesses.
+and `<task-id>-plan-<tag>.md` (`plan-<date>-<topic>-<tag>.md` with no current task), in
+opencode's `/export` layout for both harnesses.
 
 ## Checks
 
