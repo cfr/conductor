@@ -20,7 +20,7 @@ import type { Messenger } from './telegram.ts';
 
 type Busy = Role | 'gate' | null;
 
-const help = `/next-task [agent] [id] - start the next PLAN item (or a given one)
+const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /review [agent] [id] - review the current task (or a task done outside the conductor)
 /fix [notes] - reviewer applies fixes and commits
 /todo [id] - list PLAN.md "Next" items (or show one in full)
@@ -59,8 +59,7 @@ export class Conductor {
         this.adapters = { opencode: new OpencodeAdapter(local.opencodeUrl), claude: new ClaudeAdapter() };
         chat.command('help', async () => chat.send(help));
         chat.command('start', async () => chat.send(help));
-        chat.command('next-task', (a) => this.nextTask(a));
-        chat.command('nexttask', (a) => this.nextTask(a));
+        chat.command('next', (a) => this.nextTask(a));
         chat.command('review', (a) => this.review(a));
         chat.command('fix', (a) => this.fix(a));
         chat.command('plan', (a) => this.plan(a));
@@ -245,7 +244,7 @@ export class Conductor {
             this.adoptTask(id);
         }
         if (!this.state.task) {
-            await this.chat.send('no current task; /next-task, or /review <id> for work done outside');
+            await this.chat.send('no current task; /next, or /review <id> for work done outside');
             return;
         }
         await this.startReview(agent ?? this.project.roles.review);
@@ -353,7 +352,7 @@ export class Conductor {
     private async text(text: string, route: Role | undefined) {
         const role = route ?? this.state.focus;
         if (!role || !this.state.sessions[role]) {
-            await this.chat.send('no session to talk to; /next-task, /review or /plan');
+            await this.chat.send('no session to talk to; /next, /review or /plan');
             return;
         }
         await this.turn(role, text);
@@ -442,7 +441,7 @@ export class Conductor {
         if (role === 'implement') {
             await this.startReview(this.project.roles.review);
         } else if (role === 'review') {
-            await this.chat.send(`${task?.id ?? 'task'} done; /next-task when ready`);
+            await this.chat.send(`${task?.id ?? 'task'} done; /next when ready`);
         }
     }
 

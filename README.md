@@ -28,8 +28,8 @@ conductor exits with a message on `409 Conflict`).
 
 Then `/help` in the chat. The usual loop:
 
-- `/next-task [agent] [id]`: confirm, and the implementing agent starts on the first `PLAN.md`
-  "Next" item (or the given one)
+- `/next [agent] [id]`: confirm, and the implementing agent starts on the first `PLAN.md` "Next"
+  item (or the given one)
 - after a turn that committed, the gate runs; a failure goes back to the agent once
 - when the gate passes, the review starts by itself and its findings are posted
 - `/fix [notes]`: the reviewer fixes and commits, the gate runs again

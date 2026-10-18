@@ -17,7 +17,7 @@ kebab-case slug. The id names everything the task produces:
 - commits: tagged `#0038` as `AGENTS.md` requires
 
 The slug is derived from the PLAN item's title (`#0038 capsule primitives: ...` gives
-`capsule-primitives`); the bridge shows it with `/next-task` so it can be changed before work
+`capsule-primitives`); the bridge shows it with `/next` so it can be changed before work
 starts.
 
 ## Agents
@@ -71,7 +71,7 @@ tag = "opus55"
 
 The same loop as today, one command per step, with the bridge doing the bookkeeping:
 
-1. `/next-task [agent] [id]`: the bridge reads the first `PLAN.md` "Next" item (or the given
+1. `/next [agent] [id]`: the bridge reads the first `PLAN.md` "Next" item (or the given
    id), shows the id, the item text and the agent, and on confirmation starts a session with
    that agent (default `roles.implement`) titled with the id and the prompt `please do <id>`.
 2. The agent implements and commits. When the session goes idle the bridge runs the
@@ -104,9 +104,7 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
 
 ## Commands
 
-Telegram bot commands cannot contain `-`, so `/next_task` works as well as `/next-task`.
-
-- `/next-task [agent] [id]`: start the next PLAN item (or a given one) with an agent from the
+- `/next [agent] [id]`: start the next PLAN item (or a given one) with an agent from the
   config; arguments are told apart by shape (an id starts with digits)
 - `/review [agent]`, `/fix [notes]`: as above, for the current task
 - `/plan [agent] [topic]`: open a planning discussion (see below)
