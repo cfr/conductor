@@ -618,7 +618,7 @@ export class Conductor {
     private logName(role: Role, ref: SessionRef, planTouched: boolean): string {
         const tag = this.agent(ref.agent).tag;
         if (role === 'plan') {
-            return `${ref.title}-${tag}.md`;
+            return this.state.task ? `${this.state.task.id}-plan-${tag}.md` : `${ref.title}-${tag}.md`;
         }
         const id = this.state.task?.id ?? ref.title;
         if (role === 'implement') {
