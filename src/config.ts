@@ -13,9 +13,11 @@ export interface AgentConfig {
     tag: string;
     effort?: string;
     variant?: string;
+    permissionMode?: string;
 }
 
 const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+const permissionModes = ['auto', 'default', 'acceptEdits', 'dontAsk', 'plan'];
 
 export interface ProjectCommand {
     name: string;
@@ -192,7 +194,11 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         if (variant !== undefined && harness !== 'opencode') {
             throw new Error(`agents.${name}.variant is for opencode agents (claude agents use effort)`);
         }
-        agents.set(name, { name, harness, model, tag, effort, variant });
+        const mode = a.permission_mode === undefined ? undefined : str(a, 'permission_mode', `agents.${name}`);
+        if (mode !== undefined && (harness !== 'claude' || !permissionModes.includes(mode))) {
+            throw new Error(`agents.${name}.permission_mode is for claude agents: ${permissionModes.join(', ')}`);
+        }
+        agents.set(name, { name, harness, model, tag, effort, variant, permissionMode: mode });
     }
     if (agents.size === 0) {
         throw new Error('no [agents.*] defined');

@@ -49,6 +49,9 @@ test('effort is claude-only, variant opencode-only', () => {
     assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\nvariant = "high"'))), /variant/);
     assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "glm53"', 'tag = "glm53"\neffort = "high"'))), /effort/);
     assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\neffort = "huge"'))), /effort/);
+    const withMode = base.replace('tag = "opus55"', 'tag = "opus55"\npermission_mode = "acceptEdits"');
+    assert.equal(parseProjectConfig('/r', md(withMode)).agents.get('opus')?.permissionMode, 'acceptEdits');
+    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\npermission_mode = "bypassPermissions"'))), /permission_mode/);
 });
 
 test('needs exactly one toml block', () => {

@@ -56,6 +56,9 @@ tag = "opus55"
 - `harness` picks the adapter: `opencode` (model ids as `opencode models` prints them,
   `provider/model`) or `claude` (Claude Code model ids or aliases).
 - `effort` (optional, `claude` only) sets the Claude Code effort level (`low` to `max`).
+- `permission_mode` (optional, `claude` only, default `auto`): the Claude Code permission mode.
+  SDK sessions would otherwise start in `default`, which asks for every write command, while
+  interactive sessions run in `auto`. `bypassPermissions` is not accepted.
 - `variant` (optional, `opencode` only) picks the model variant opencode offers (`default`, or
   e.g. `low`/`high`/`max` thinking); checked against opencode's model list when a session starts.
 - `[prompts]` overrides the text sent at each step (`implement`, `review`, `fix`, `fix_notes`,

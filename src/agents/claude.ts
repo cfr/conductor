@@ -81,6 +81,8 @@ class ClaudeSession implements AgentSession {
             model: this.agent.model,
             systemPrompt: { type: 'preset', preset: 'claude_code' },
             canUseTool: this.canUseTool,
+            // SDK sessions start in 'default' mode, unlike interactive Claude Code
+            permissionMode: (this.agent.permissionMode ?? 'auto') as Options['permissionMode'],
             abortController: this.abort,
             ...(this.agent.effort ? { effort: this.agent.effort as Options['effort'] } : {}),
             ...(this.started ? { resume: this.id } : { sessionId: this.id, title: this.opts.title }),
