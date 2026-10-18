@@ -1,4 +1,5 @@
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy';
+import { escapeHtml, markdownToHtml } from './format.ts';
 
 const maxMessage = 4000;
 const maxChunks = 3;
@@ -10,6 +11,7 @@ export interface Messenger {
     onText: TextHandler;
     command(name: string, handler: CommandHandler): void;
     send(text: string, route?: string): Promise<void>;
+    sendMarkdown(prefix: string, markdown: string, route?: string): Promise<void>;
     sendFile(name: string, content: string, caption?: string, route?: string): Promise<void>;
     ask(text: string, choices: string[], allowText: boolean): Promise<string>;
     pendingQuestions(): number;
@@ -38,6 +40,15 @@ export function chunk(text: string, size = maxMessage): string[] {
         out.push(rest);
     }
     return out;
+}
+
+function stripHtml(html: string): string {
+    return html
+        .replace(/<[^>]+>/g, '')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&');
 }
 
 export class Chat implements Messenger {
@@ -127,6 +138,40 @@ export class Chat implements Messenger {
         }
         if (attachment !== undefined) {
             await this.sendFile('message.md', attachment, undefined, route);
+        }
+    }
+
+    async sendMarkdown(prefix: string, markdown: string, route?: string): Promise<void> {
+        const head = `<b>${escapeHtml(prefix)}</b>\n`;
+        let chunks = markdownToHtml(markdown, maxMessage - head.length);
+        const attach = chunks.length > maxChunks;
+        if (attach) {
+            chunks = [chunks[0] + '\n\n<i>… (full text attached)</i>'];
+        }
+        for (const [i, html] of chunks.entries()) {
+            const text = i === 0 ? head + html : html;
+            let id: number;
+            try {
+                const msg = await this.bot.api.sendMessage(this.userId, text, {
+                    parse_mode: 'HTML',
+                    link_preview_options: { is_disabled: true },
+                });
+                id = msg.message_id;
+            } catch (e) {
+                if (!(e instanceof GrammyError && e.error_code === 400)) {
+                    throw e;
+                }
+                const msg = await this.bot.api.sendMessage(this.userId, stripHtml(text), {
+                    link_preview_options: { is_disabled: true },
+                });
+                id = msg.message_id;
+            }
+            if (route) {
+                this.routes.set(id, route);
+            }
+        }
+        if (attach) {
+            await this.sendFile('message.md', markdown, undefined, route);
         }
     }
 

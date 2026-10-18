@@ -370,7 +370,7 @@ export class Conductor {
             await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
             const p = this.prefix(role);
             if (r.text) {
-                await this.chat.send(`${p} ${r.text}`, role);
+                await this.chat.sendMarkdown(p, r.text, role);
             }
             if (r.outcome !== 'succeeded') {
                 await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}`, role);

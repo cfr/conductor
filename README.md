@@ -42,6 +42,9 @@ Then `/help` in the chat. The usual loop:
 items and offers commit / keep / discard. `/status`, `/stop`, `/agents` and `/log` do what they
 say.
 
+Agent replies are rendered from markdown to Telegram HTML (headings, bold, code blocks, lists,
+links, quotes, tables as preformatted text); a chunk Telegram rejects is resent as plain text.
+
 Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-review[-plan]-<tag>.md`
 and `plan-<date>-<topic>-<tag>.md`, in opencode's `/export` layout for both harnesses.
 
