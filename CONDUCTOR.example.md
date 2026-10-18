@@ -1,8 +1,9 @@
 # Conductor
 
 Configuration for the conductor bridge (`../conductor`): which agents implement, review and plan,
-the verification gate it runs after every committing turn, and the prompts it sends. The bridge
-parses the one `toml` block below; everything else here is for people.
+the verification gate it runs after every committing turn, the prompts it sends, and project
+commands (`/deploy`, `/serve`) that only run when sent from the chat. The bridge parses the one
+`toml` block below; everything else here is for people.
 
 ```toml
 [gate]
@@ -31,6 +32,16 @@ tag = "opus55"
 
 [logs]
 dir = "wlog"
+
+[commands.deploy]
+cmd = "deploy/deploy.sh"
+description = "git push, build and upload images, update the VPS"
+confirm = true
+
+[commands.serve]
+cmd = "cmake --build build-wasm && exec deploy/serve.py"
+description = "rebuild wasm and serve it over https with a local game server"
+background = true
 
 [prompts]
 implement = "please do {id}"

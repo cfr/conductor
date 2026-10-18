@@ -16,7 +16,7 @@ const conductor = new Conductor(local, store, chat);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.once(sig, () => {
         chat.stop();
-        process.exit(0);
+        void conductor.shutdown().finally(() => process.exit(0));
     });
 }
 

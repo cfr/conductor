@@ -42,6 +42,13 @@ Then `/help` in the chat. The usual loop:
 items and offers commit / keep / discard. `/status`, `/stop`, `/agents` and `/log` do what they
 say.
 
+Project commands come from `[commands.<name>]` in `CONDUCTOR.md` (`cmd`, `description`,
+`confirm` for a yes/no button first, `background` for long-running ones). Text after the command
+is appended to `cmd`. A one-shot command reports its exit status and output tail (full log
+attached when long) and waits for no agent turn or gate to be running; a background one starts
+with `/<name>`, shows its status when sent again and stops with `/<name> stop` (the whole process
+group). Output logs are in `state/commands/`. Agents never run these.
+
 Agent replies are rendered from markdown to Telegram HTML (headings, bold, code blocks, lists,
 links, quotes, tables as preformatted text); a chunk Telegram rejects is resent as plain text.
 

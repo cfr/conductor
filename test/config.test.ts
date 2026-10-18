@@ -52,3 +52,23 @@ test('env file parsing', () => {
     assert.equal(env.TELEGRAM_ALLOWED_USER_ID, '42');
     assert.equal(env.X, '');
 });
+
+test('project commands', () => {
+    const extra = `
+[commands.deploy]
+cmd = "deploy/deploy.sh"
+description = "release"
+confirm = true
+
+[commands.serve]
+cmd = "deploy/serve.py"
+background = true
+`;
+    const c = parseProjectConfig('/r', md(base + extra));
+    assert.deepEqual(
+        c.commands.map((x) => [x.name, x.confirm, x.background, x.description]),
+        [['deploy', true, false, 'release'], ['serve', false, true, 'serve']],
+    );
+    assert.throws(() => parseProjectConfig('/r', md(base + '[commands.review]\ncmd = "x"\n')), /built-in/);
+    assert.throws(() => parseProjectConfig('/r', md(base + '[commands.Deploy]\ncmd = "x"\n')), /lowercase/);
+});

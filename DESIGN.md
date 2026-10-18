@@ -211,7 +211,9 @@ only `PLAN.md` (no code, no commits). The conversation runs in the chat like any
 - One agent writes to the tree at a time (the "no edits during parallel agent" rule as a lock);
   a step that would overlap is refused with the reason. Auto-review starts only after the
   implementation session is idle and its gate run is done.
-- Agents never push or deploy from the bridge; `git push` and `deploy/` scripts stay manual.
+- Agents never push or deploy from the bridge. Project commands (`[commands]` in `CONDUCTOR.md`,
+  e.g. `/deploy`, `/serve`) run only when I send them, with a confirmation button where
+  `confirm` is set, and a one-shot command never overlaps an agent turn or the gate.
 - The bridge's own gate run is the result it reports, not the agent's claim.
 - Long output (diffs, logs, gate failures) goes as attached files; messages stay under
   Telegram's 4096-character limit.

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { ClaudeAdapter } from './agents/claude.ts';
 import { OpencodeAdapter } from './agents/opencode.ts';
 import type { Adapter, AgentSession, Asker, Question } from './agents/types.ts';
@@ -8,9 +8,11 @@ import {
     loadProjectConfig,
     type AgentConfig,
     type LocalConfig,
+    type ProjectCommand,
     type ProjectConfig,
     type Role,
 } from './config.ts';
+import { Jobs, logTail } from './jobs.ts';
 import { renderMarkdown } from './logs/markdown.ts';
 import { idNumber, parseNext, summary, type PlanItem } from './plan.ts';
 import { git, tail } from './proc.ts';
@@ -18,7 +20,9 @@ import * as repo from './repo.ts';
 import type { SessionRef, Store } from './state.ts';
 import type { Messenger } from './telegram.ts';
 
-type Busy = Role | 'gate' | null;
+type Busy = Role | 'gate' | `/${string}` | null;
+
+const roles: readonly string[] = ['implement', 'review', 'plan'];
 
 const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /review [agent] [id] - review the current task (or a task done outside the conductor)
@@ -47,6 +51,7 @@ export class Conductor {
     private adapters: Record<AgentConfig['harness'], Adapter>;
     private live = new Map<Role, AgentSession>();
     private busy: Busy = null;
+    private jobs: Jobs;
     private local: LocalConfig;
     private store: Store;
     private chat: Messenger;
@@ -57,8 +62,12 @@ export class Conductor {
         this.chat = chat;
         this.project = loadProjectConfig(local.project);
         this.adapters = { opencode: new OpencodeAdapter(local.opencodeUrl), claude: new ClaudeAdapter() };
-        chat.command('help', async () => chat.send(help));
-        chat.command('start', async () => chat.send(help));
+        this.jobs = new Jobs(join(dirname(local.stateFile), 'commands'));
+        chat.command('help', async () => chat.send(this.help()));
+        chat.command('start', async () => chat.send(this.help()));
+        for (const c of this.project.commands) {
+            chat.command(c.name, (a) => this.projectCommand(c.name, a));
+        }
         chat.command('next', (a) => this.nextTask(a));
         chat.command('review', (a) => this.review(a));
         chat.command('fix', (a) => this.fix(a));
@@ -69,6 +78,86 @@ export class Conductor {
         chat.command('stop', () => this.stop());
         chat.command('log', () => this.exportAll());
         chat.onText = (text, route) => this.text(text, route as Role | undefined);
+    }
+
+    private help(): string {
+        const extra = this.project.commands.map((c) => {
+            const usage = c.background ? ` [stop]` : '';
+            return `/${c.name}${usage} - ${c.description}${c.background ? ' (runs in the background)' : ''}`;
+        });
+        return extra.length ? `${help}\n\nProject commands:\n${extra.join('\n')}` : help;
+    }
+
+    private async projectCommand(name: string, args: string) {
+        this.reload();
+        const c = this.project.commands.find((x) => x.name === name);
+        if (!c) {
+            await this.chat.send(`/${name} is no longer in CONDUCTOR.md`);
+            return;
+        }
+        if (c.background) {
+            await this.backgroundCommand(c, args);
+        } else {
+            await this.oneShotCommand(c, args);
+        }
+    }
+
+    private commandLine(c: ProjectCommand, args: string): string {
+        return args ? `${c.cmd} ${args}` : c.cmd;
+    }
+
+    private async oneShotCommand(c: ProjectCommand, args: string) {
+        const cmd = this.commandLine(c, args);
+        if (c.confirm && (await this.chat.ask(`Run /${c.name}?\n\n$ ${cmd}`, ['run', 'cancel'], false)) !== 'run') {
+            return;
+        }
+        this.claim(`/${c.name}`);
+        try {
+            await this.chat.send(`/${c.name}: running…`);
+            const started = Date.now();
+            const r = await this.jobs.run(c.name, cmd, this.project.root);
+            const secs = ((Date.now() - started) / 1000).toFixed(0);
+            const outcome = r.code === 0 ? 'done' : `failed (exit ${r.code})`;
+            await this.chat.send(`/${c.name}: ${outcome} in ${secs} s\n\n${logTail(r.log, 20)}`);
+            const full = readFileSync(r.log, 'utf8');
+            if (full.split('\n').length > 21) {
+                await this.chat.sendFile(`${c.name}.log`, full);
+            }
+        } finally {
+            this.busy = null;
+        }
+    }
+
+    private async backgroundCommand(c: ProjectCommand, args: string) {
+        const running = this.jobs.get(c.name);
+        if (args === 'stop') {
+            await this.chat.send((await this.jobs.stop(c.name)) ? `/${c.name}: stopping…` : `/${c.name} is not running`);
+            return;
+        }
+        if (running) {
+            const mins = ((Date.now() - running.started) / 60000).toFixed(0);
+            const note = args && args !== 'status' ? '\n(already running; /' + c.name + ' stop first)' : '';
+            await this.chat.send(`/${c.name}: running for ${mins} min (pid ${running.child.pid})${note}\n\n${logTail(running.log, 15)}`);
+            return;
+        }
+        const cmd = this.commandLine(c, args === 'status' ? '' : args);
+        if (c.confirm && (await this.chat.ask(`Start /${c.name}?\n\n$ ${cmd}`, ['start', 'cancel'], false)) !== 'start') {
+            return;
+        }
+        await this.chat.send(`/${c.name}: starting…`);
+        const job = this.jobs.start(c.name, cmd, this.project.root, (j, code) => {
+            const how = j.stopping ? 'stopped' : `exited (code ${code})`;
+            void this.chat.send(`/${c.name}: ${how}\n\n${logTail(j.log, 15)}`);
+        });
+        setTimeout(() => {
+            if (this.jobs.get(c.name) === job) {
+                void this.chat.send(`/${c.name}: running (pid ${job.child.pid})\n\n${logTail(job.log, 15)}`);
+            }
+        }, 5000);
+    }
+
+    async shutdown() {
+        await this.jobs.stopAll();
     }
 
     private get state() {
@@ -502,11 +591,12 @@ export class Conductor {
     }
 
     private async stop() {
-        const role = this.busy;
-        if (!role || role === 'gate') {
-            await this.chat.send(role === 'gate' ? 'the gate is running; it cannot be stopped yet' : 'nothing is running');
+        const busy = this.busy;
+        if (!busy || !roles.includes(busy)) {
+            await this.chat.send(busy ? `${busy} is running; it cannot be stopped yet` : 'nothing is running');
             return;
         }
+        const role = busy as Role;
         await this.session(role).interrupt();
         await this.chat.send(`interrupt sent to ${this.prefix(role)}`);
     }
@@ -531,6 +621,12 @@ export class Conductor {
         for (const [role, ref] of Object.entries(s.sessions)) {
             lines.push(`${role}: ${this.agent(ref.agent).tag} ${ref.id}${ref.logFile ? `\n  log ${ref.logFile}` : ''}`);
         }
+        for (const c of this.project.commands) {
+            const job = this.jobs.get(c.name);
+            if (job) {
+                lines.push(`/${c.name}: running for ${((Date.now() - job.started) / 60000).toFixed(0)} min`);
+            }
+        }
         if (s.lastGate) {
             const g = s.lastGate;
             lines.push(`last gate: ${g.ok ? 'passed' : `failed at ${g.step}`} at ${g.sha.slice(0, 7)} (${g.at})`);
@@ -542,8 +638,8 @@ export class Conductor {
         const s = this.state;
         const text = `conductor up: ${this.project.root}${s.task ? `, task ${s.task.id}` : ''}. /help`;
         const commands = new Map<string, string>();
-        for (const line of help.split('\n')) {
-            const m = /^\/([a-z-]+)\b.*? - (.*)$/.exec(line);
+        for (const line of this.help().split('\n')) {
+            const m = /^\/([a-z0-9_-]+)\b.*? - (.*)$/.exec(line);
             if (m && !commands.has(m[1])) {
                 commands.set(m[1].replace(/-/g, '_'), m[2].slice(0, 256));
             }

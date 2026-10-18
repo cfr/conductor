@@ -14,6 +14,18 @@ export interface AgentConfig {
     effort?: string;
 }
 
+export interface ProjectCommand {
+    name: string;
+    cmd: string;
+    description: string;
+    confirm: boolean;
+    background: boolean;
+}
+
+export const builtinCommands = [
+    'help', 'start', 'next', 'review', 'fix', 'todo', 'plan', 'agents', 'status', 'stop', 'log',
+];
+
 export interface GateStep {
     name: string;
     cmd: string;
@@ -36,6 +48,7 @@ export interface ProjectConfig {
     roles: Record<Role, string>;
     agents: Map<string, AgentConfig>;
     prompts: Prompts;
+    commands: ProjectCommand[];
 }
 
 export interface LocalConfig {
@@ -195,8 +208,30 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         planDone: str(p, 'plan_done', 'prompts', defaultPrompts.planDone),
     };
 
+    const commands: ProjectCommand[] = [];
+    for (const [name, raw] of Object.entries(table(t.commands, 'commands'))) {
+        const what = `commands.${name}`;
+        if (!/^[a-z][a-z0-9_]*$/.test(name) || builtinCommands.includes(name)) {
+            throw new Error(`${what}: the name must be lowercase a-z, 0-9, _ and not a built-in command`);
+        }
+        const c = table(raw, what);
+        const flag = (key: string, fallback: boolean) => {
+            if (c[key] !== undefined && typeof c[key] !== 'boolean') {
+                throw new Error(`${what}.${key} must be true or false`);
+            }
+            return (c[key] as boolean | undefined) ?? fallback;
+        };
+        commands.push({
+            name,
+            cmd: str(c, 'cmd', what),
+            description: str(c, 'description', what, name),
+            confirm: flag('confirm', false),
+            background: flag('background', false),
+        });
+    }
+
     const logDir = resolve(root, str(table(t.logs, 'logs'), 'dir', 'logs', 'wlog'));
-    return { root, logDir, gate, roles, agents, prompts };
+    return { root, logDir, gate, roles, agents, prompts, commands };
 }
 
 export function loadProjectConfig(root: string): ProjectConfig {
