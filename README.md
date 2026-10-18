@@ -33,6 +33,8 @@ Then `/help` in the chat. The usual loop:
 - after a turn that committed, the gate runs; a failure goes back to the agent once
 - when the gate passes, the review starts by itself and its findings are posted
 - `/fix [notes]`: the reviewer fixes and commits, the gate runs again
+- `/review [agent] <id>` reviews work done outside the conductor, e.g. a task GLM finished in the
+  TUI
 - plain text goes to the current session; reply to an agent's message to reach that session
 
 `/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` writes the

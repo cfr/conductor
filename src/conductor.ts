@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ClaudeAdapter } from './agents/claude.ts';
 import { OpencodeAdapter } from './agents/opencode.ts';
@@ -21,7 +21,7 @@ import type { Messenger } from './telegram.ts';
 type Busy = Role | 'gate' | null;
 
 const help = `/next-task [agent] [id] - start the next PLAN item (or a given one)
-/review [agent] - start a review of the current task
+/review [agent] [id] - review the current task (or a task done outside the conductor)
 /fix [notes] - reviewer applies fixes and commits
 /plan [agent] [topic] - planning discussion (edits PLAN.md only)
 /plan done - write the agreed items, then commit / keep / discard
@@ -224,13 +224,43 @@ export class Conductor {
 
     private async review(args: string) {
         this.reload();
-        const task = this.state.task;
-        if (!task) {
-            await this.chat.send('no current task; /next-task first');
+        const { agent, id } = this.parseArgs(args);
+        if (id && id !== this.state.task?.id && idNumber(id) !== this.state.task?.number) {
+            if (this.busy) {
+                throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
+            }
+            this.adoptTask(id);
+        }
+        if (!this.state.task) {
+            await this.chat.send('no current task; /next-task, or /review <id> for work done outside');
             return;
         }
-        const { agent } = this.parseArgs(args);
         await this.startReview(agent ?? this.project.roles.review);
+    }
+
+    private adoptTask(id: string) {
+        const items = parseNext(readFileSync(join(this.project.root, 'PLAN.md'), 'utf8'));
+        const found = items.find((i) => i.id === id || i.number === idNumber(id));
+        const fullId = found?.id ?? (id.includes('-') ? id : this.findLoggedId(idNumber(id))) ?? id;
+        this.live.clear();
+        this.state.task = found ?? { id: fullId, number: idNumber(id), text: '(done outside the conductor)' };
+        this.state.sessions = {};
+        this.state.lastGate = undefined;
+        this.store.save();
+    }
+
+    private findLoggedId(num: string): string | undefined {
+        const dir = this.project.logDir;
+        if (!existsSync(dir)) {
+            return undefined;
+        }
+        for (const name of readdirSync(dir)) {
+            const m = /^(\d{4}-[a-z0-9-]+?)-(?:review-(?:plan-)?)?[a-z0-9.]+\.md$/.exec(name);
+            if (m && name.startsWith(`${num}-`)) {
+                return m[1];
+            }
+        }
+        return undefined;
     }
 
     private async startReview(agentName: string) {
