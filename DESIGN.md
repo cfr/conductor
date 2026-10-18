@@ -41,9 +41,10 @@ harness = "opencode"
 model = "zai-coding-plan/glm-5.3"
 tag = "glm53"
 
-[agents.deepseek]
+[agents.ds]
 harness = "opencode"
 model = "deepseek/deepseek-v4-pro"
+variant = "default"
 tag = "deepseek4pro"
 
 [agents.opus]
@@ -54,7 +55,9 @@ tag = "opus55"
 
 - `harness` picks the adapter: `opencode` (model ids as `opencode models` prints them,
   `provider/model`) or `claude` (Claude Code model ids or aliases).
-- `effort` (optional, `claude` only) sets the Claude Code effort level.
+- `effort` (optional, `claude` only) sets the Claude Code effort level (`low` to `max`).
+- `variant` (optional, `opencode` only) picks the model variant opencode offers (`default`, or
+  e.g. `low`/`high`/`max` thinking); checked against opencode's model list when a session starts.
 - `[prompts]` overrides the text sent at each step (`implement`, `review`, `fix`, `fix_notes`,
   `gate_failed`, `plan`, `plan_done`); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}` and
   `{topic}` are filled in. `[logs] dir` sets the log directory (default `wlog`).

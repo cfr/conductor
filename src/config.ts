@@ -12,7 +12,10 @@ export interface AgentConfig {
     model: string;
     tag: string;
     effort?: string;
+    variant?: string;
 }
+
+const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface ProjectCommand {
     name: string;
@@ -182,7 +185,14 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         }
         tags.add(tag);
         const effort = a.effort === undefined ? undefined : str(a, 'effort', `agents.${name}`);
-        agents.set(name, { name, harness, model, tag, effort });
+        if (effort !== undefined && (harness !== 'claude' || !efforts.includes(effort))) {
+            throw new Error(`agents.${name}.effort is for claude agents: ${efforts.join(', ')}`);
+        }
+        const variant = a.variant === undefined ? undefined : str(a, 'variant', `agents.${name}`);
+        if (variant !== undefined && harness !== 'opencode') {
+            throw new Error(`agents.${name}.variant is for opencode agents (claude agents use effort)`);
+        }
+        agents.set(name, { name, harness, model, tag, effort, variant });
     }
     if (agents.size === 0) {
         throw new Error('no [agents.*] defined');

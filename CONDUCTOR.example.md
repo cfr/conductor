@@ -18,16 +18,25 @@ plan = "opus"
 [agents.glm]
 harness = "opencode"
 model = "zai-coding-plan/glm-5.3"
+variant = "default"
 tag = "glm53"
 
-[agents.deepseek]
+[agents.ds]
 harness = "opencode"
 model = "deepseek/deepseek-v4-pro"
+variant = "default"
 tag = "deepseek4pro"
+
+[agents.dsf]
+harness = "opencode"
+model = "deepseek/deepseek-flash"
+variant = "default"
+tag = "deepseek41flash"
 
 [agents.opus]
 harness = "claude"
 model = "claude-opus-5-5"
+effort = "medium"
 tag = "opus55"
 
 [logs]

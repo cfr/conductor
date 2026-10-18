@@ -168,11 +168,31 @@ export class OpencodeAdapter implements Adapter {
         await this.api('POST', `/api/session/${sid}/form/${String(form.id)}/reply`, { answer });
     }
 
+    private async checkVariant(providerID: string, id: string, variant: string) {
+        const res = await this.api<{ data: { providerID: string; id: string; variants?: { id: string }[] }[] }>(
+            'GET',
+            '/api/model',
+        );
+        const model = res.data.find((m) => m.providerID === providerID && m.id === id);
+        if (!model) {
+            throw new Error(`opencode has no model ${providerID}/${id}`);
+        }
+        const allowed = ['default', ...(model.variants ?? []).map((v) => v.id)];
+        if (!allowed.includes(variant)) {
+            throw new Error(`${providerID}/${id} has no variant "${variant}"; one of ${allowed.join(', ')}`);
+        }
+    }
+
     async create(agent: AgentConfig, opts: SessionOptions): Promise<AgentSession> {
         const slash = agent.model.indexOf('/');
+        const providerID = agent.model.slice(0, slash);
+        const id = agent.model.slice(slash + 1);
+        if (agent.variant) {
+            await this.checkVariant(providerID, id, agent.variant);
+        }
         const res = await this.api<{ data: { id: string } }>('POST', '/api/session', {
             title: opts.title,
-            model: { providerID: agent.model.slice(0, slash), id: agent.model.slice(slash + 1) },
+            model: { providerID, id, ...(agent.variant ? { variant: agent.variant } : {}) },
             location: { directory: opts.cwd },
         });
         return this.resume(agent, res.data.id, opts);

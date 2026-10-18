@@ -295,7 +295,7 @@ export class Conductor {
         this.claim('implement');
         try {
             const go = await this.chat.ask(
-                `Start ${item.id} with ${agent.tag} (${agent.model})?\n\n${item.text}`,
+                `Start ${item.id} with ${agent.tag} (${agent.model}${agent.variant ? `, variant ${agent.variant}` : ''})?\n\n${item.text}`,
                 ['start', 'cancel'],
                 false,
             );
@@ -603,7 +603,9 @@ export class Conductor {
 
     private agentList(): string {
         const lines = [...this.project.agents.values()].map(
-            (a) => `${a.name}: ${a.tag} (${a.harness} ${a.model}${a.effort ? `, effort ${a.effort}` : ''})`,
+            (a) =>
+                `${a.name}: ${a.tag} (${a.harness} ${a.model}` +
+                `${a.effort ? `, effort ${a.effort}` : ''}${a.variant ? `, variant ${a.variant}` : ''})`,
         );
         const r = this.project.roles;
         lines.push('', `roles: implement=${r.implement} review=${r.review} plan=${r.plan}`);

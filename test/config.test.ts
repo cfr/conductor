@@ -41,6 +41,16 @@ test('rejects duplicate tags, unknown roles and bad opencode models', () => {
     assert.throws(() => parseProjectConfig('/r', md(base.replace('harness = "claude"', 'harness = "x"'))), /harness/);
 });
 
+test('effort is claude-only, variant opencode-only', () => {
+    const withVariant = base.replace('tag = "glm53"', 'tag = "glm53"\nvariant = "high"');
+    assert.equal(parseProjectConfig('/r', md(withVariant)).agents.get('glm')?.variant, 'high');
+    const withEffort = base.replace('tag = "opus55"', 'tag = "opus55"\neffort = "medium"');
+    assert.equal(parseProjectConfig('/r', md(withEffort)).agents.get('opus')?.effort, 'medium');
+    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\nvariant = "high"'))), /variant/);
+    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "glm53"', 'tag = "glm53"\neffort = "high"'))), /effort/);
+    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\neffort = "huge"'))), /effort/);
+});
+
 test('needs exactly one toml block', () => {
     assert.throws(() => extractTomlBlock('no block'), /exactly one/);
     assert.throws(() => extractTomlBlock(md('a = 1') + md('b = 2')), /exactly one/);
