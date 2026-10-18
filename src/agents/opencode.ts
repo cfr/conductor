@@ -133,7 +133,8 @@ export class OpencodeAdapter implements Adapter {
     private async answerPermission(sid: string, asker: Asker, req: Record<string, unknown>) {
         const resources = (req.resources as string[] | undefined)?.join('\n') ?? '';
         const detail = [req.message as string | undefined, resources].filter(Boolean).join('\n\n');
-        const decision = await asker.permission(`permission: ${String(req.action)}`, detail);
+        const asked = await asker.permission(`permission: ${String(req.action)}`, detail);
+        const decision = asked === 'pattern' ? 'always' : asked;
         await this.api('POST', `/api/session/${sid}/permission/${String(req.id)}/reply`, { decision });
     }
 

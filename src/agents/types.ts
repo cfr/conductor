@@ -19,10 +19,10 @@ export interface Question {
     allowText: boolean;
 }
 
-export type PermissionDecision = 'once' | 'always' | 'reject';
+export type PermissionDecision = 'once' | 'always' | 'pattern' | 'reject';
 
 export interface Asker {
-    permission(title: string, detail: string): Promise<PermissionDecision>;
+    permission(title: string, detail: string, patterns?: string[]): Promise<PermissionDecision>;
     question(q: Question): Promise<string>;
 }
 

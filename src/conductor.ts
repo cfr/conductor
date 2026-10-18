@@ -96,13 +96,19 @@ export class Conductor {
 
     private asker(role: Role): Asker {
         return {
-            permission: async (title, detail) => {
-                const a = await this.chat.ask(
-                    `${this.prefix(role)} ${title}\n\n${detail}`,
-                    ['allow once', 'allow always', 'deny'],
-                    false,
-                );
-                return a === 'allow once' ? 'once' : a === 'allow always' ? 'always' : 'reject';
+            permission: async (title, detail, patterns = []) => {
+                const broad = patterns.length ? `always: ${patterns.join(', ')}` : undefined;
+                const exact = patterns.length ? 'always: this exact command' : 'allow always';
+                const choices = ['allow once', exact, ...(broad ? [broad] : []), 'deny'];
+                const rules = patterns.length ? `\n\nbroader rules: ${patterns.map((p) => `Bash(${p})`).join(' ')}` : '';
+                const a = await this.chat.ask(`${this.prefix(role)} ${title}\n\n${detail}${rules}`, choices, false);
+                if (a === 'allow once') {
+                    return 'once';
+                }
+                if (a === exact) {
+                    return 'always';
+                }
+                return a === broad ? 'pattern' : 'reject';
             },
             question: async (q: Question) => {
                 const lines = [`${this.prefix(role)} ${q.title}`];

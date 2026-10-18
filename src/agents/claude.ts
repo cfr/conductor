@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { query, type CanUseTool, type Options } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentConfig } from '../config.ts';
 import { findTranscript, readClaudeTranscript } from '../logs/claude.ts';
+import { bashPatterns } from './bash-rules.ts';
 import type { Transcript } from '../logs/markdown.ts';
 import type { Adapter, AgentSession, SessionOptions, TurnResult } from './types.ts';
 
@@ -52,9 +53,19 @@ class ClaudeSession implements AgentSession {
             return { behavior: 'allow', updatedInput: { ...input, answers } };
         }
         const detail = JSON.stringify(input, null, 2).slice(0, 1500);
-        const decision = await this.opts.asker.permission(`permission: ${toolName}`, detail);
+        const patterns =
+            toolName === 'Bash' && typeof input.command === 'string' ? bashPatterns(input.command) : [];
+        const decision = await this.opts.asker.permission(`permission: ${toolName}`, detail, patterns);
         if (decision === 'reject') {
             return { behavior: 'deny', message: 'The user denied this tool call.' };
+        }
+        if (decision === 'pattern') {
+            const rules = patterns.map((ruleContent) => ({ toolName: 'Bash', ruleContent }));
+            return {
+                behavior: 'allow',
+                updatedInput: input,
+                updatedPermissions: [{ type: 'addRules', rules, behavior: 'allow', destination: 'localSettings' }],
+            };
         }
         return {
             behavior: 'allow',
