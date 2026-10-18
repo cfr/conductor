@@ -1,0 +1,15 @@
+# Copy to conductor.toml (gitignored). Machine-specific settings only; the project's agents,
+# roles, gate and prompts live in the project's CONDUCTOR.md.
+
+project = "~/Code/bane"
+
+# Defaults to state/state.json next to this file.
+# state = "state/state.json"
+
+[telegram]
+# Reads TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_ID; nothing is copied.
+env = "~/.config/opencode-telegram-bot/.env"
+
+[opencode]
+# The shared background service (`opencode service start`).
+url = "http://127.0.0.1:49374"

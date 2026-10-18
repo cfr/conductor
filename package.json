@@ -1,0 +1,24 @@
+{
+  "name": "conductor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "opencode/Claude Code/Telegram orchestration tool",
+  "scripts": {
+    "start": "node src/main.ts",
+    "check": "tsc --noEmit",
+    "test": "node --test 'test/*.test.ts'"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.302",
+    "grammy": "^1.46.0",
+    "smol-toml": "^1.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}

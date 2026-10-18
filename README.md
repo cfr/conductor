@@ -1,0 +1,61 @@
+# conductor
+
+opencode/Claude Code/Telegram orchestration tool.
+
+From one Telegram chat, one agent implements a `PLAN.md` item, the bridge runs the project's
+verification gate, a second agent reviews, and `/fix` applies the review. Agents run through
+opencode (its background service) or Claude Code (the Agent SDK); every session is exported to
+markdown after each turn. See `DESIGN.md` for the flow and its reasons.
+
+## Setup
+
+Node 24 or newer (TypeScript runs directly through Node's type stripping, no build step).
+
+    npm install
+    cp conductor.example.toml conductor.toml   # set project and the Telegram env file
+
+The project needs a `CONDUCTOR.md` at its root with one `toml` block: gate commands, agents,
+roles and optional prompts. `CONDUCTOR.example.md` is the one for bane.
+
+Telegram credentials come from the env file named in `conductor.toml` (`TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_ALLOWED_USER_ID`); messages from any other user are ignored. Only one process may poll a
+bot token, so stop opencode-telegram-bot while the conductor runs on the same token (the
+conductor exits with a message on `409 Conflict`).
+
+## Run
+
+    npm start
+
+Then `/help` in the chat. The usual loop:
+
+- `/next-task [agent] [id]`: confirm, and the implementing agent starts on the first `PLAN.md`
+  "Next" item (or the given one)
+- after a turn that committed, the gate runs; a failure goes back to the agent once
+- when the gate passes, the review starts by itself and its findings are posted
+- `/fix [notes]`: the reviewer fixes and commits, the gate runs again
+- plain text goes to the current session; reply to an agent's message to reach that session
+
+`/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` writes the
+items and offers commit / keep / discard. `/status`, `/stop`, `/agents` and `/log` do what they
+say.
+
+Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-review[-plan]-<tag>.md`
+and `plan-<date>-<topic>-<tag>.md`, in opencode's `/export` layout for both harnesses.
+
+## Checks
+
+    npm run check   # tsc --noEmit
+    npm test        # node --test
+
+## Status
+
+Prototype. Driven end to end headlessly (a fake chat) against a throwaway repo: implement with
+GLM-5.3 flash, gate, gate failure handed back and fixed, auto-review and `/fix` with Haiku 5.5
+(including a permission prompt), log export. Not yet run against Telegram itself.
+
+Known gaps:
+
+- the gate cannot be interrupted, and a bridge restart in the middle of a turn loses that turn
+  (sessions themselves resume)
+- the planning session's "PLAN.md only" rule is checked after each turn, not enforced
+- tool outputs in logs are not shortened

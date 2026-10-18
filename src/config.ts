@@ -1,0 +1,208 @@
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, resolve } from 'node:path';
+import { parse } from 'smol-toml';
+
+export type Harness = 'opencode' | 'claude';
+export type Role = 'implement' | 'review' | 'plan';
+
+export interface AgentConfig {
+    name: string;
+    harness: Harness;
+    model: string;
+    tag: string;
+    effort?: string;
+}
+
+export interface GateStep {
+    name: string;
+    cmd: string;
+}
+
+export interface Prompts {
+    implement: string;
+    review: string;
+    fix: string;
+    fixNotes: string;
+    gateFailed: string;
+    plan: string;
+    planDone: string;
+}
+
+export interface ProjectConfig {
+    root: string;
+    logDir: string;
+    gate: GateStep[];
+    roles: Record<Role, string>;
+    agents: Map<string, AgentConfig>;
+    prompts: Prompts;
+}
+
+export interface LocalConfig {
+    file: string;
+    project: string;
+    stateFile: string;
+    telegram: { token: string; allowedUserId: number };
+    opencodeUrl: string;
+}
+
+const defaultPrompts: Prompts = {
+    implement: 'please do {id}',
+    review: 'please review {id}',
+    fix: 'please fix all issues, commit',
+    fixNotes: '{notes}\n\nThen commit.',
+    gateFailed:
+        'The verification gate failed after your last turn (step `{step}`). Fix it and commit. ' +
+        'Output tail:\n\n```\n{output}\n```',
+    plan:
+        'Planning discussion{topic}. You may read the repository, but edit only PLAN.md: no code ' +
+        'changes and no commits. Discuss with me first; I will say when to write the items down.',
+    planDone: 'Please write the agreed items into PLAN.md now. Do not commit.',
+};
+
+export function expandHome(p: string): string {
+    return p === '~' || p.startsWith('~/') ? homedir() + p.slice(1) : p;
+}
+
+type Table = Record<string, unknown>;
+
+function table(v: unknown, what: string): Table {
+    if (v === undefined) {
+        return {};
+    }
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+        throw new Error(`${what} must be a table`);
+    }
+    return v as Table;
+}
+
+function str(t: Table, key: string, what: string, fallback?: string): string {
+    const v = t[key];
+    if (v === undefined && fallback !== undefined) {
+        return fallback;
+    }
+    if (typeof v !== 'string' || v === '') {
+        throw new Error(`${what}.${key} must be a non-empty string`);
+    }
+    return v;
+}
+
+export function parseEnvFile(text: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const raw of text.split('\n')) {
+        const line = raw.trim();
+        const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+        if (!m || line.startsWith('#')) {
+            continue;
+        }
+        let value = m[2];
+        if (/^(['"]).*\1$/.test(value)) {
+            value = value.slice(1, -1);
+        } else {
+            value = value.replace(/\s+#.*$/, '');
+        }
+        out[m[1]] = value;
+    }
+    return out;
+}
+
+export function loadLocalConfig(file: string): LocalConfig {
+    const t = parse(readFileSync(file, 'utf8')) as Table;
+    const base = dirname(file);
+    const tg = table(t.telegram, 'telegram');
+    const envFile = expandHome(str(tg, 'env', 'telegram'));
+    const env = parseEnvFile(readFileSync(envFile, 'utf8'));
+    const token = env.TELEGRAM_BOT_TOKEN;
+    const user = Number(env.TELEGRAM_ALLOWED_USER_ID);
+    if (!token || !Number.isSafeInteger(user) || user <= 0) {
+        throw new Error(`${envFile} must define TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_ID`);
+    }
+    const oc = table(t.opencode, 'opencode');
+    return {
+        file,
+        project: resolve(base, expandHome(str(t, 'project', 'config'))),
+        stateFile: resolve(base, expandHome(str(t, 'state', 'config', 'state/state.json'))),
+        telegram: { token, allowedUserId: user },
+        opencodeUrl: str(oc, 'url', 'opencode', 'http://127.0.0.1:49374'),
+    };
+}
+
+export function extractTomlBlock(markdown: string): string {
+    const blocks = [...markdown.matchAll(/^```toml[^\n]*\n([\s\S]*?)^```\s*$/gm)];
+    if (blocks.length !== 1) {
+        throw new Error(`CONDUCTOR.md must contain exactly one \`\`\`toml block, found ${blocks.length}`);
+    }
+    return blocks[0][1];
+}
+
+export function parseProjectConfig(root: string, markdown: string): ProjectConfig {
+    const t = parse(extractTomlBlock(markdown)) as Table;
+
+    const gate = Object.entries(table(t.gate, 'gate')).map(([name, cmd]) => {
+        if (typeof cmd !== 'string' || cmd === '') {
+            throw new Error(`gate.${name} must be a command string`);
+        }
+        return { name, cmd };
+    });
+    if (gate.length === 0) {
+        throw new Error('[gate] needs at least one command');
+    }
+
+    const agents = new Map<string, AgentConfig>();
+    const tags = new Set<string>();
+    for (const [name, raw] of Object.entries(table(t.agents, 'agents'))) {
+        const a = table(raw, `agents.${name}`);
+        const harness = str(a, 'harness', `agents.${name}`);
+        if (harness !== 'opencode' && harness !== 'claude') {
+            throw new Error(`agents.${name}.harness must be "opencode" or "claude"`);
+        }
+        const model = str(a, 'model', `agents.${name}`);
+        if (harness === 'opencode' && !model.includes('/')) {
+            throw new Error(`agents.${name}.model must be provider/model for opencode`);
+        }
+        const tag = str(a, 'tag', `agents.${name}`);
+        if (!/^[a-z0-9.]+$/.test(tag)) {
+            throw new Error(`agents.${name}.tag may only use a-z, 0-9 and dots`);
+        }
+        if (tags.has(tag)) {
+            throw new Error(`duplicate agent tag "${tag}"`);
+        }
+        tags.add(tag);
+        const effort = a.effort === undefined ? undefined : str(a, 'effort', `agents.${name}`);
+        agents.set(name, { name, harness, model, tag, effort });
+    }
+    if (agents.size === 0) {
+        throw new Error('no [agents.*] defined');
+    }
+
+    const r = table(t.roles, 'roles');
+    const roles = {} as Record<Role, string>;
+    for (const role of ['implement', 'review', 'plan'] as const) {
+        roles[role] = str(r, role, 'roles');
+        if (!agents.has(roles[role])) {
+            throw new Error(`roles.${role} names unknown agent "${roles[role]}"`);
+        }
+    }
+
+    const p = table(t.prompts, 'prompts');
+    const prompts: Prompts = {
+        implement: str(p, 'implement', 'prompts', defaultPrompts.implement),
+        review: str(p, 'review', 'prompts', defaultPrompts.review),
+        fix: str(p, 'fix', 'prompts', defaultPrompts.fix),
+        fixNotes: str(p, 'fix_notes', 'prompts', defaultPrompts.fixNotes),
+        gateFailed: str(p, 'gate_failed', 'prompts', defaultPrompts.gateFailed),
+        plan: str(p, 'plan', 'prompts', defaultPrompts.plan),
+        planDone: str(p, 'plan_done', 'prompts', defaultPrompts.planDone),
+    };
+
+    const logDir = resolve(root, str(table(t.logs, 'logs'), 'dir', 'logs', 'wlog'));
+    return { root, logDir, gate, roles, agents, prompts };
+}
+
+export function loadProjectConfig(root: string): ProjectConfig {
+    return parseProjectConfig(root, readFileSync(resolve(root, 'CONDUCTOR.md'), 'utf8'));
+}
+
+export function fill(template: string, vars: Record<string, string>): string {
+    return template.replace(/\{(\w+)\}/g, (m, k: string) => vars[k] ?? m);
+}
