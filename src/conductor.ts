@@ -841,6 +841,10 @@ export class Conductor {
     }
 
     async announce() {
+        const reaped = await this.jobs.reapStale();
+        if (reaped.length) {
+            await this.chat.send(`stopped leftover ${reaped.map((n) => `/${n}`).join(', ')} from a previous run`);
+        }
         const s = this.state;
         const text = `conductor up: ${this.project.root}${s.task ? `, task ${s.task.id}` : ''}. /help`;
         const commands = new Map<string, string>();

@@ -63,7 +63,10 @@ instead of a snapshot five seconds after the start). Text after the command
 is appended to `cmd`. A one-shot command reports its exit status and output tail (full log
 attached when long) and waits for no agent turn or gate to be running; a background one starts
 with `/<name>`, shows its status when sent again and stops with `/<name> stop` (the whole process
-group). Output logs are in `state/commands/`. Agents never run these.
+group). The conductor stops its background commands when it exits (Ctrl-C, SIGTERM, a closed
+terminal, a `409`); one left over from a run that could not (killed, crashed) is stopped at the
+next start through its `state/commands/<name>.pid`. Output logs are in `state/commands/`. Agents
+never run these.
 
 Agent replies are rendered from markdown to Telegram HTML (headings, bold, code blocks, lists,
 links, quotes, tables as preformatted text); a chunk Telegram rejects is resent as plain text.

@@ -27,3 +27,15 @@ test('one-shot runs to a log, background jobs stop with their children', async (
     assert.equal(jobs.get('bg'), undefined);
     assert.equal(logTail(join(dir, 'bg.log'), 1), 'up');
 });
+
+test('a later run stops the process group a lost run left behind', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'conductor-jobs-'));
+    const lost = new Jobs(dir);
+    const exited = new Promise<void>((resolve) => {
+        lost.start('serve', 'sh -c "sleep 30" & sleep 30', dir, () => resolve());
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(await new Jobs(dir).reapStale(), ['serve']);
+    await exited;
+    assert.deepEqual(await new Jobs(dir).reapStale(), []);
+});

@@ -217,11 +217,10 @@ export class Chat implements Messenger {
             await this.bot.start({ onStart, allowed_updates: ['message', 'callback_query'] });
         } catch (e) {
             if (e instanceof GrammyError && e.error_code === 409) {
-                console.error(
+                throw new Error(
                     'Another process is polling this bot token (409 Conflict). ' +
                         'Stop opencode-telegram-bot first; the token is shared.',
                 );
-                process.exit(1);
             }
             throw e;
         }

@@ -13,14 +13,23 @@ const store = new Store(local.stateFile);
 const chat = new Chat(local.telegram.token, local.telegram.allowedUserId);
 const conductor = new Conductor(local, store, chat);
 
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-    process.once(sig, () => {
-        chat.stop();
-        void conductor.shutdown().finally(() => process.exit(0));
-    });
+async function quit(code: number) {
+    chat.stop();
+    await conductor.shutdown().catch((e: Error) => console.error('shutdown:', e.message));
+    process.exit(code);
 }
 
-await chat.start(() => {
-    console.log(`conductor: polling Telegram for ${local.project}`);
-    conductor.announce().catch((e: Error) => console.error('announce:', e.message));
-});
+// SIGHUP: the terminal closed; background jobs run in their own process groups and would survive
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.once(sig, () => void quit(0));
+}
+
+try {
+    await chat.start(() => {
+        console.log(`conductor: polling Telegram for ${local.project}`);
+        conductor.announce().catch((e: Error) => console.error('announce:', e.message));
+    });
+} catch (e) {
+    console.error((e as Error).message);
+    await quit(1);
+}
