@@ -638,6 +638,11 @@ export class Conductor {
             return;
         }
         if (this.busy) {
+            await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
+            const text = await this.session(role).lastReply();
+            if (text) {
+                await this.chat.sendMarkdown(p, text, role);
+            }
             await this.chat.send(`${p} finished a turn it started itself; ${this.busy} is running, so its commits are checked after the next turn`, role);
             return;
         }

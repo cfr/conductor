@@ -41,8 +41,9 @@ Then `/help` in the chat. The usual loop:
 
 When opencode resumes a session by itself (a background job the agent started finished), the
 conductor posts that and handles the end of that turn like any other: reply, log, gate, review.
-Commits are checked against the last commit the conductor saw for the session, so a commit made
-in a turn it missed is still picked up at the end of the next one.
+If another turn is running then, only the reply and the log are handled. Commits are checked
+against the last commit the conductor saw for the session, so a commit made in such a turn (or
+one it missed) is still picked up at the end of the next one.
 
 `/chat [new] [agent] <message>` talks about the project in a separate read-only session (Claude
 Code plan mode, opencode's `plan` agent) that runs alongside the task flow: reply to its messages
