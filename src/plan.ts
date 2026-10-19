@@ -4,12 +4,24 @@ export interface PlanItem {
     text: string;
 }
 
-export function parseNext(plan: string): PlanItem[] {
+function nextSection(plan: string): string[] {
     const lines = plan.split('\n');
     const start = lines.findIndex((l) => /^## Next\s*$/.test(l));
     if (start < 0) {
         return [];
     }
+    const end = lines.findIndex((l, i) => i > start && l.startsWith('## '));
+    return lines.slice(start + 1, end < 0 ? undefined : end);
+}
+
+export function emptyNextMessage(plan: string): string {
+    const bullets = nextSection(plan).filter((l) => l.startsWith('- ')).length;
+    return bullets
+        ? `PLAN.md "Next" has ${bullets} item(s), none starting with \`- NNNN-slug:\` (e.g. \`- 0059-render-scale:\`)`
+        : 'PLAN.md "Next" is empty';
+}
+
+export function parseNext(plan: string): PlanItem[] {
     const items: PlanItem[] = [];
     let current: string[] | null = null;
     const flush = () => {
@@ -22,10 +34,7 @@ export function parseNext(plan: string): PlanItem[] {
         }
         current = null;
     };
-    for (const line of lines.slice(start + 1)) {
-        if (line.startsWith('## ')) {
-            break;
-        }
+    for (const line of nextSection(plan)) {
         if (line.startsWith('- ')) {
             flush();
             current = [line];

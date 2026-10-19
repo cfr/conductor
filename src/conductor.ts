@@ -15,7 +15,7 @@ import {
 } from './config.ts';
 import { Jobs, logTail, readLog } from './jobs.ts';
 import { renderMarkdown } from './logs/markdown.ts';
-import { idNumber, parseNext, summary, type PlanItem } from './plan.ts';
+import { emptyNextMessage, idNumber, parseNext, summary, type PlanItem } from './plan.ts';
 import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
 import type { SessionRef, State, Store } from './state.ts';
@@ -314,7 +314,8 @@ export class Conductor {
         const { agent: agentArg, id } = this.parseArgs(args);
         const agentName = agentArg ?? this.project.roles.implement;
         const agent = this.agent(agentName);
-        const items = parseNext(readFileSync(join(this.project.root, 'PLAN.md'), 'utf8'));
+        const plan = readFileSync(join(this.project.root, 'PLAN.md'), 'utf8');
+        const items = parseNext(plan);
         let item: PlanItem | undefined;
         if (id) {
             item = items.find((i) => i.id === id || i.number === idNumber(id));
@@ -325,7 +326,7 @@ export class Conductor {
             item = items[0];
         }
         if (!item) {
-            await this.chat.send(id ? `no PLAN item ${id}` : 'PLAN.md "Next" is empty');
+            await this.chat.send(id ? `no PLAN item ${id}` : emptyNextMessage(plan));
             return;
         }
         this.claim('implement');
@@ -351,14 +352,15 @@ export class Conductor {
     }
 
     private async todo(args: string) {
-        const items = parseNext(readFileSync(join(this.project.root, 'PLAN.md'), 'utf8'));
+        const plan = readFileSync(join(this.project.root, 'PLAN.md'), 'utf8');
+        const items = parseNext(plan);
         const id = args.trim();
         if (id) {
             const item = items.find((i) => i.id === id || i.number === idNumber(id));
             await this.chat.send(item ? item.text : `no PLAN item ${id}`);
             return;
         }
-        await this.chat.send(items.length ? items.map(summary).join('\n\n') : 'PLAN.md "Next" is empty');
+        await this.chat.send(items.length ? items.map(summary).join('\n\n') : emptyNextMessage(plan));
     }
 
     private vars(extra: Record<string, string> = {}): Record<string, string> {

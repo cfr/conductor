@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseNext, summary } from '../src/plan.ts';
+import { emptyNextMessage, parseNext, summary } from '../src/plan.ts';
 import { chunk } from '../src/telegram.ts';
 
 const plan = `# plan
@@ -37,4 +37,9 @@ test('chunks long text at newlines', () => {
     assert.ok(parts.length > 1);
     assert.ok(parts.every((p) => p.length <= 4000));
     assert.equal(parts.join('\n'), text);
+});
+
+test('explains a Next section whose items lack ids', () => {
+    assert.match(emptyNextMessage('## Next\n\n- #0060 page shell: fix\n\n## Research\n'), /1 item\(s\), none/);
+    assert.equal(emptyNextMessage('## Next\n\nnothing yet\n'), 'PLAN.md "Next" is empty');
 });
