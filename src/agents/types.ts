@@ -30,6 +30,7 @@ export interface SessionOptions {
     title: string;
     cwd: string;
     asker: Asker;
+    readOnly?: boolean;
 }
 
 export interface AgentSession {

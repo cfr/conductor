@@ -11,13 +11,14 @@ import {
     type ProjectCommand,
     type ProjectConfig,
     type Role,
+    type SessionRole,
 } from './config.ts';
 import { Jobs, logTail, readLog } from './jobs.ts';
 import { renderMarkdown } from './logs/markdown.ts';
 import { idNumber, parseNext, summary, type PlanItem } from './plan.ts';
 import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
-import type { SessionRef, Store } from './state.ts';
+import type { SessionRef, State, Store } from './state.ts';
 import type { Messenger } from './telegram.ts';
 
 type Busy = Role | 'gate' | `/${string}` | null;
@@ -30,10 +31,11 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /gate - run the gate on the current session's commits now, then continue as after a turn
 /todo [id] - list PLAN.md "Next" items (or show one in full)
 /plan [agent] [topic] - planning discussion (edits PLAN.md only)
+/chat [new] [agent] <message> - read-only chat about the project, alongside running work
 /plan done - write the agreed items, then commit / keep / discard
 /agents - configured agents and role defaults
 /status - current task, step, sessions, last gate
-/stop - interrupt the running agent
+/stop [chat] - interrupt the running agent (or the chat)
 /log - export session logs now
 Plain text goes to the current session; reply to an agent message to reach that session.`;
 
@@ -50,8 +52,9 @@ function slug(text: string): string {
 export class Conductor {
     private project: ProjectConfig;
     private adapters: Record<AgentConfig['harness'], Adapter>;
-    private live = new Map<Role, AgentSession>();
+    private live = new Map<SessionRole, AgentSession>();
     private busy: Busy = null;
+    private chatBusy = false;
     private jobs: Jobs;
     private local: LocalConfig;
     private store: Store;
@@ -75,15 +78,16 @@ export class Conductor {
         chat.command('gate', () => this.gateCommand());
         chat.command('plan', (a) => this.plan(a));
         chat.command('todo', (a) => this.todo(a));
+        chat.command('chat', (a) => this.chatCommand(a));
         chat.command('agents', async () => chat.send(this.agentList()));
         chat.command('status', async () => chat.send(this.status()));
-        chat.command('stop', () => this.stop());
+        chat.command('stop', (a) => this.stop(a));
         chat.command('log', () => this.exportAll());
-        chat.onText = (text, route) => this.text(text, route as Role | undefined);
+        chat.onText = (text, route) => this.text(text, route as SessionRole | undefined);
         for (const adapter of Object.values(this.adapters)) {
             adapter.onUnsolicited = (id, ev) => this.detach(this.unsolicited(id, ev));
         }
-        for (const role of Object.keys(this.state.sessions) as Role[]) {
+        for (const role of Object.keys(this.state.sessions) as SessionRole[]) {
             try {
                 this.session(role);
             } catch (e) {
@@ -206,14 +210,14 @@ export class Conductor {
         return a;
     }
 
-    private prefix(role: Role): string {
+    private prefix(role: SessionRole): string {
         const ref = this.state.sessions[role];
         const tag = ref ? this.agent(ref.agent).tag : '?';
-        const num = role === 'plan' ? 'plan' : (this.state.task?.number ?? '');
+        const num = role === 'plan' || role === 'chat' ? role : (this.state.task?.number ?? '');
         return `[${tag} ${num}]`.replace(' ]', ']');
     }
 
-    private asker(role: Role): Asker {
+    private asker(role: SessionRole): Asker {
         return {
             permission: async (title, detail, patterns = []) => {
                 const broad = patterns.length ? `always: ${patterns.join(', ')}` : undefined;
@@ -244,7 +248,7 @@ export class Conductor {
         };
     }
 
-    private session(role: Role): AgentSession {
+    private session(role: SessionRole): AgentSession {
         let s = this.live.get(role);
         if (s) {
             return s;
@@ -258,17 +262,19 @@ export class Conductor {
             title: ref.title,
             cwd: this.project.root,
             asker: this.asker(role),
+            readOnly: role === 'chat',
         });
         this.live.set(role, s);
         return s;
     }
 
-    private async createSession(role: Role, agentName: string, title: string) {
+    private async createSession(role: SessionRole, agentName: string, title: string) {
         const agent = this.agent(agentName);
         const s = await this.adapters[agent.harness].create(agent, {
             title,
             cwd: this.project.root,
             asker: this.asker(role),
+            readOnly: role === 'chat',
         });
         this.live.set(role, s);
         this.state.sessions[role] = {
@@ -332,9 +338,9 @@ export class Conductor {
             if (go !== 'start') {
                 return;
             }
-            this.live.clear();
+            this.dropTaskSessions();
             this.state.task = item;
-            this.state.sessions = {};
+            this.state.sessions = this.keepChat();
             this.state.focus = 'implement';
             this.state.lastGate = undefined;
             await this.createSession('implement', agentName, item.id);
@@ -379,9 +385,9 @@ export class Conductor {
         const items = parseNext(readFileSync(join(this.project.root, 'PLAN.md'), 'utf8'));
         const found = items.find((i) => i.id === id || i.number === idNumber(id));
         const fullId = found?.id ?? (id.includes('-') ? id : this.findLoggedId(idNumber(id))) ?? id;
-        this.live.clear();
+        this.dropTaskSessions();
         this.state.task = found ?? { id: fullId, number: idNumber(id), text: '(done outside the conductor)' };
-        this.state.sessions = {};
+        this.state.sessions = this.keepChat();
         this.state.lastGate = undefined;
         this.store.save();
     }
@@ -483,7 +489,80 @@ export class Conductor {
         await this.chat.send(`planning commit undone; HEAD is back at ${before.slice(0, 7)}`);
     }
 
-    private async text(text: string, route: Role | undefined) {
+    private keepChat(): State['sessions'] {
+        return this.state.sessions.chat ? { chat: this.state.sessions.chat } : {};
+    }
+
+    private dropTaskSessions() {
+        for (const role of [...this.live.keys()]) {
+            if (role !== 'chat') {
+                this.live.delete(role);
+            }
+        }
+    }
+
+    private async chatCommand(args: string) {
+        this.reload();
+        let rest = args.trim();
+        const fresh = /^new\b/.test(rest);
+        if (fresh) {
+            rest = rest.replace(/^new\s*/, '');
+        }
+        const first = rest.split(/\s+/)[0];
+        let agentName: string | undefined;
+        if (first && this.project.agents.has(first)) {
+            agentName = first;
+            rest = rest.slice(first.length).trim();
+        }
+        let ref = this.state.sessions.chat;
+        const wanted = agentName ?? (ref && !fresh ? ref.agent : this.project.roles.chat);
+        if (!ref || fresh || wanted !== ref.agent) {
+            if (this.chatBusy) {
+                throw new Error('the chat is answering; wait for it or /stop');
+            }
+            const date = new Date().toISOString().slice(0, 10);
+            const title = this.state.task ? `${this.state.task.id}-chat` : `chat-${date}`;
+            this.live.delete('chat');
+            await this.createSession('chat', wanted, title);
+            ref = this.state.sessions.chat!;
+            if (!rest) {
+                await this.chat.send(`${this.prefix('chat')} new read-only chat; /chat <message> or reply to its messages`);
+                return;
+            }
+            rest = fill(this.project.prompts.chat, { message: rest });
+        } else if (!rest) {
+            await this.chat.send(`${this.prefix('chat')} chat session ${ref.id}; /chat <message> or reply to its messages`);
+            return;
+        }
+        await this.chatTurn(rest);
+    }
+
+    private async chatTurn(text: string) {
+        if (this.chatBusy) {
+            throw new Error('the chat is answering; wait for it or /stop');
+        }
+        this.chatBusy = true;
+        try {
+            const p = this.prefix('chat');
+            await this.chat.send(`${p} thinking…`, 'chat');
+            const r = await this.session('chat').send(text);
+            await this.exportLog('chat').catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
+            if (r.text) {
+                await this.chat.sendMarkdown(p, r.text, 'chat');
+            }
+            if (r.outcome !== 'succeeded') {
+                await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}`, 'chat');
+            }
+        } finally {
+            this.chatBusy = false;
+        }
+    }
+
+    private async text(text: string, route: SessionRole | undefined) {
+        if (route === 'chat') {
+            await this.chatTurn(text);
+            return;
+        }
         const role = route ?? this.state.focus;
         if (!role || !this.state.sessions[role]) {
             await this.chat.send('no session to talk to; /next, /review or /plan');
@@ -539,10 +618,20 @@ export class Conductor {
     }
 
     private async unsolicited(sessionId: string, ev: UnsolicitedEvent) {
-        const role = (Object.keys(this.state.sessions) as Role[]).find((r) => this.state.sessions[r]?.id === sessionId);
-        if (!role) {
+        const found = (Object.keys(this.state.sessions) as SessionRole[]).find(
+            (r) => this.state.sessions[r]?.id === sessionId,
+        );
+        if (!found) {
             return;
         }
+        if (found === 'chat') {
+            if (ev.phase === 'ended' && !this.chatBusy) {
+                await this.exportLog('chat');
+                await this.chat.sendMarkdown(this.prefix('chat'), await this.session('chat').lastReply(), 'chat');
+            }
+            return;
+        }
+        const role: Role = found;
         const p = this.prefix(role);
         if (ev.phase === 'started') {
             await this.chat.send(`${p} resumed on its own (e.g. a background job finished)…`, role);
@@ -642,8 +731,11 @@ export class Conductor {
         }
     }
 
-    private logName(role: Role, ref: SessionRef, planTouched: boolean): string {
+    private logName(role: SessionRole, ref: SessionRef, planTouched: boolean): string {
         const tag = this.agent(ref.agent).tag;
+        if (role === 'chat') {
+            return `${ref.title}-${tag}.md`;
+        }
         if (role === 'plan') {
             return this.state.task ? `${this.state.task.id}-plan-${tag}.md` : `${ref.title}-${tag}.md`;
         }
@@ -654,7 +746,7 @@ export class Conductor {
         return `${id}-review${planTouched ? '-plan' : ''}-${tag}.md`;
     }
 
-    private async exportLog(role: Role) {
+    private async exportLog(role: SessionRole) {
         const ref = this.state.sessions[role];
         if (!ref) {
             return;
@@ -682,7 +774,7 @@ export class Conductor {
 
     private async exportAll() {
         const done: string[] = [];
-        for (const role of Object.keys(this.state.sessions) as Role[]) {
+        for (const role of Object.keys(this.state.sessions) as SessionRole[]) {
             await this.exportLog(role);
             const f = this.state.sessions[role]?.logFile;
             if (f) {
@@ -692,8 +784,13 @@ export class Conductor {
         await this.chat.send(done.length ? `exported:\n${done.join('\n')}` : 'no sessions');
     }
 
-    private async stop() {
+    private async stop(args = '') {
         const busy = this.busy;
+        if (this.chatBusy && (args === 'chat' || !busy)) {
+            await this.session('chat').interrupt();
+            await this.chat.send(`interrupt sent to ${this.prefix('chat')}`);
+            return;
+        }
         if (!busy || !roles.includes(busy)) {
             await this.chat.send(busy ? `${busy} is running; it cannot be stopped yet` : 'nothing is running');
             return;
@@ -720,7 +817,7 @@ export class Conductor {
             `project: ${this.project.root}`,
             `task: ${s.task?.id ?? '-'}`,
             `running: ${this.busy ?? 'nothing'}${this.chat.pendingQuestions() ? ` (${this.chat.pendingQuestions()} question(s) waiting)` : ''}`,
-            `focus: ${s.focus ?? '-'}`,
+            `focus: ${s.focus ?? '-'}${this.chatBusy ? ' (chat answering)' : ''}`,
         ];
         for (const [role, ref] of Object.entries(s.sessions)) {
             lines.push(`${role}: ${this.agent(ref.agent).tag} ${ref.id}${ref.logFile ? `\n  log ${ref.logFile}` : ''}`);

@@ -5,6 +5,7 @@ import { parse } from 'smol-toml';
 
 export type Harness = 'opencode' | 'claude';
 export type Role = 'implement' | 'review' | 'plan';
+export type SessionRole = Role | 'chat';
 
 export interface AgentConfig {
     name: string;
@@ -29,7 +30,8 @@ export interface ProjectCommand {
 }
 
 export const builtinCommands = [
-    'help', 'start', 'next', 'review', 'fix', 'gate', 'todo', 'plan', 'agents', 'status', 'stop', 'log',
+    'help', 'start', 'next', 'review', 'fix', 'gate', 'todo', 'plan', 'chat', 'agents', 'status', 'stop',
+    'log',
 ];
 
 export interface GateStep {
@@ -45,13 +47,14 @@ export interface Prompts {
     gateFailed: string;
     plan: string;
     planDone: string;
+    chat: string;
 }
 
 export interface ProjectConfig {
     root: string;
     logDir: string;
     gate: GateStep[];
-    roles: Record<Role, string>;
+    roles: Record<Role | 'chat', string>;
     agents: Map<string, AgentConfig>;
     prompts: Prompts;
     commands: ProjectCommand[];
@@ -79,6 +82,10 @@ const defaultPrompts: Prompts = {
     planDone:
         'Please write the agreed items into PLAN.md now and commit only PLAN.md, following the ' +
         "project's commit message rules.",
+    chat:
+        'This is a read-only chat about the project. Another agent may be working in this tree right ' +
+        'now, so uncommitted changes may be theirs. Do not edit files or run anything that changes ' +
+        'state.\n\n{message}',
 };
 
 export function expandHome(p: string): string {
@@ -208,12 +215,16 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
     }
 
     const r = table(t.roles, 'roles');
-    const roles = {} as Record<Role, string>;
+    const roles = {} as Record<Role | 'chat', string>;
     for (const role of ['implement', 'review', 'plan'] as const) {
         roles[role] = str(r, role, 'roles');
         if (!agents.has(roles[role])) {
             throw new Error(`roles.${role} names unknown agent "${roles[role]}"`);
         }
+    }
+    roles.chat = r.chat === undefined ? roles.plan : str(r, 'chat', 'roles');
+    if (!agents.has(roles.chat)) {
+        throw new Error(`roles.chat names unknown agent "${roles.chat}"`);
     }
 
     const p = table(t.prompts, 'prompts');
@@ -225,6 +236,7 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         gateFailed: str(p, 'gate_failed', 'prompts', defaultPrompts.gateFailed),
         plan: str(p, 'plan', 'prompts', defaultPrompts.plan),
         planDone: str(p, 'plan_done', 'prompts', defaultPrompts.planDone),
+        chat: str(p, 'chat', 'prompts', defaultPrompts.chat),
     };
 
     const commands: ProjectCommand[] = [];

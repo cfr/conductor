@@ -40,6 +40,9 @@ class ClaudeSession implements AgentSession {
     }
 
     private canUseTool: CanUseTool = async (toolName, input, { suggestions }) => {
+        if (this.opts.readOnly && toolName === 'ExitPlanMode') {
+            return { behavior: 'deny', message: 'This is a read-only chat: answer in text, change nothing.' };
+        }
         if (toolName === 'AskUserQuestion') {
             const answers: Record<string, string> = {};
             for (const q of (input as AskInput).questions ?? []) {
@@ -82,7 +85,7 @@ class ClaudeSession implements AgentSession {
             systemPrompt: { type: 'preset', preset: 'claude_code' },
             canUseTool: this.canUseTool,
             // SDK sessions start in 'default' mode, unlike interactive Claude Code
-            permissionMode: (this.agent.permissionMode ?? 'auto') as Options['permissionMode'],
+            permissionMode: (this.opts.readOnly ? 'plan' : (this.agent.permissionMode ?? 'auto')) as Options['permissionMode'],
             abortController: this.abort,
             ...(this.agent.effort ? { effort: this.agent.effort as Options['effort'] } : {}),
             ...(this.started ? { resume: this.id } : { sessionId: this.id, title: this.opts.title }),

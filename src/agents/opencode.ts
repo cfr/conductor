@@ -205,6 +205,7 @@ export class OpencodeAdapter implements Adapter {
         const res = await this.api<{ data: { id: string } }>('POST', '/api/session', {
             title: opts.title,
             model: { providerID, id, ...(agent.variant ? { variant: agent.variant } : {}) },
+            ...(opts.readOnly ? { agent: 'plan' } : {}),
             location: { directory: opts.cwd },
         });
         return this.resume(agent, res.data.id, opts);

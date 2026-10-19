@@ -180,6 +180,14 @@ Agents block in two ways and both must reach the chat:
 Every agent message is prefixed with the agent tag and task (`[glm53 0038]`, `[opus55 0038]`) so
 one chat stays readable.
 
+## Chat
+
+`/chat [new] [agent] <message>` opens or continues a read-only session for questions about the
+project while a task runs: Claude agents run it in plan mode (with `ExitPlanMode` refused),
+opencode agents with its read-only `plan` agent, and its first message says another agent may be
+changing the tree. It has its own busy flag, so it never waits for or blocks the task flow, and
+it is not reset by `/next`. Replies to its messages reach it; plain text keeps going to the task.
+
 ## Planning discussion
 
 `/plan [agent] [topic]` opens a session (default `roles.plan`) that may read the repo and edit

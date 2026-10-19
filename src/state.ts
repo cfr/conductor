@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { Role } from './config.ts';
+import type { Role, SessionRole } from './config.ts';
 import type { PlanItem } from './plan.ts';
 
 export interface SessionRef {
@@ -22,7 +22,7 @@ export interface GateRecord {
 export interface State {
     task?: PlanItem;
     focus?: Role;
-    sessions: Partial<Record<Role, SessionRef>>;
+    sessions: Partial<Record<SessionRole, SessionRef>>;
     lastGate?: GateRecord;
     planTopic?: string;
 }
