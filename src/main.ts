@@ -13,15 +13,22 @@ const store = new Store(local.stateFile);
 const chat = new Chat(local.telegram.token, local.telegram.allowedUserId);
 const conductor = new Conductor(local, store, chat);
 
+let quitting = false;
+
 async function quit(code: number) {
+    if (quitting) {
+        return;
+    }
+    quitting = true;
     chat.stop();
     await conductor.shutdown().catch((e: Error) => console.error('shutdown:', e.message));
     process.exit(code);
 }
 
-// SIGHUP: the terminal closed; background jobs run in their own process groups and would survive
+// SIGHUP: the terminal closed; background jobs run in their own process groups and would survive.
+// `on`, not `once`: npm forwards Ctrl-C's SIGINT again, and a default handler would kill us mid-stop.
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-    process.once(sig, () => void quit(0));
+    process.on(sig, () => void quit(0));
 }
 
 try {
