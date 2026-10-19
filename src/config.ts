@@ -25,6 +25,7 @@ export interface ProjectCommand {
     description: string;
     confirm: boolean;
     background: boolean;
+    ready?: RegExp;
 }
 
 export const builtinCommands = [
@@ -239,12 +240,25 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
             }
             return (c[key] as boolean | undefined) ?? fallback;
         };
+        let ready: RegExp | undefined;
+        if (c.ready !== undefined) {
+            try {
+                ready = new RegExp(str(c, 'ready', what), 'm');
+            } catch (e) {
+                throw new Error(`${what}.ready: ${(e as Error).message}`);
+            }
+        }
+        const background = flag('background', false);
+        if (ready && !background) {
+            throw new Error(`${what}.ready only applies to background commands`);
+        }
         commands.push({
             name,
             cmd: str(c, 'cmd', what),
             description: str(c, 'description', what, name),
             confirm: flag('confirm', false),
-            background: flag('background', false),
+            background,
+            ready,
         });
     }
 

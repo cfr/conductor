@@ -76,12 +76,15 @@ confirm = true
 [commands.serve]
 cmd = "deploy/serve.py"
 background = true
+ready = "open https://"
 `;
     const c = parseProjectConfig('/r', md(base + extra));
     assert.deepEqual(
         c.commands.map((x) => [x.name, x.confirm, x.background, x.description]),
         [['deploy', true, false, 'release'], ['serve', false, true, 'serve']],
     );
+    assert.equal(c.commands[1].ready?.test('  open https://x:9443/'), true);
+    assert.throws(() => parseProjectConfig('/r', md(base + '[commands.d]\ncmd = "x"\nready = "y"\n')), /background/);
     assert.throws(() => parseProjectConfig('/r', md(base + '[commands.review]\ncmd = "x"\n')), /built-in/);
     assert.throws(() => parseProjectConfig('/r', md(base + '[commands.Deploy]\ncmd = "x"\n')), /lowercase/);
 });

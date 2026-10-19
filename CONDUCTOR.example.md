@@ -51,6 +51,7 @@ confirm = true
 cmd = "cmake --build build-wasm && exec deploy/serve.py"
 description = "rebuild wasm and serve it over https with a local game server"
 background = true
+ready = "open https://"
 
 [prompts]
 implement = "please do {id}"

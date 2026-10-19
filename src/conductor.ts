@@ -12,7 +12,7 @@ import {
     type ProjectConfig,
     type Role,
 } from './config.ts';
-import { Jobs, logTail } from './jobs.ts';
+import { Jobs, logTail, readLog } from './jobs.ts';
 import { renderMarkdown } from './logs/markdown.ts';
 import { idNumber, parseNext, summary, type PlanItem } from './plan.ts';
 import { git, tail } from './proc.ts';
@@ -161,11 +161,29 @@ export class Conductor {
             const how = j.stopping ? 'stopped' : `exited (code ${code})`;
             void this.chat.send(`/${c.name}: ${how}\n\n${logTail(j.log, 15)}`);
         });
-        setTimeout(() => {
-            if (this.jobs.get(c.name) === job) {
-                void this.chat.send(`/${c.name}: running (pid ${job.child.pid})\n\n${logTail(job.log, 15)}`);
+        if (!c.ready) {
+            setTimeout(() => {
+                if (this.jobs.get(c.name) === job) {
+                    void this.chat.send(`/${c.name}: running (pid ${job.child.pid})\n\n${logTail(job.log, 15)}`);
+                }
+            }, 5000);
+            return;
+        }
+        const ready = c.ready;
+        const poll = setInterval(() => {
+            if (this.jobs.get(c.name) !== job) {
+                clearInterval(poll);
+                return;
             }
-        }, 5000);
+            const log = readLog(job.log);
+            const m = ready.exec(log);
+            if (m) {
+                clearInterval(poll);
+                // the matched line and what follows it, e.g. a URL list
+                const fromMatch = log.slice(log.lastIndexOf('\n', m.index) + 1).trimEnd().split('\n').slice(0, 15);
+                void this.chat.send(`/${c.name}: ready (pid ${job.child.pid})\n\n${fromMatch.join('\n')}`);
+            }
+        }, 1000);
     }
 
     async shutdown() {

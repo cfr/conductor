@@ -51,7 +51,9 @@ shows the commit and offers to undo it. `/status`, `/stop`, `/agents` and `/log`
 say.
 
 Project commands come from `[commands.<name>]` in `CONDUCTOR.md` (`cmd`, `description`,
-`confirm` for a yes/no button first, `background` for long-running ones). Text after the command
+`confirm` for a yes/no button first, `background` for long-running ones, `ready` a regular
+expression: a background command reports its output from the first matching line, e.g. its URL,
+instead of a snapshot five seconds after the start). Text after the command
 is appended to `cmd`. A one-shot command reports its exit status and output tail (full log
 attached when long) and waits for no agent turn or gate to be running; a background one starts
 with `/<name>`, shows its status when sent again and stops with `/<name> stop` (the whole process

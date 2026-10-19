@@ -10,6 +10,14 @@ export interface Job {
     stopping: boolean;
 }
 
+export function readLog(file: string): string {
+    try {
+        return readFileSync(file, 'utf8');
+    } catch {
+        return '';
+    }
+}
+
 export function logTail(file: string, lines: number): string {
     try {
         return readFileSync(file, 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
