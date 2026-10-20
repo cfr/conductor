@@ -32,6 +32,7 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /todo [id] - list PLAN.md "Next" items (or show one in full)
 /plan [agent] [topic] - planning discussion (edits PLAN.md only)
 /chat [new] [agent] <message> - read-only chat about the project, alongside running work
+/chat stop - close the chat session (its log stays)
 /summary [role] [agent] - an agent reads the running (or focused) session's log and sums it up
 /plan done - write the agreed items, then commit / keep / discard
 /agents - configured agents and role defaults
@@ -511,6 +512,10 @@ export class Conductor {
     private async chatCommand(args: string) {
         this.reload();
         let rest = args.trim();
+        if (rest === 'stop') {
+            await this.closeChat();
+            return;
+        }
         const fresh = /^new\b/.test(rest);
         if (fresh) {
             rest = rest.replace(/^new\s*/, '');
@@ -528,7 +533,12 @@ export class Conductor {
                 throw new Error('the chat is answering; wait for it or /stop');
             }
             const date = new Date().toISOString().slice(0, 10);
-            const title = this.state.task ? `${this.state.task.id}-chat` : `chat-${date}`;
+            const base = this.state.task ? `${this.state.task.id}-chat` : `chat-${date}`;
+            const tag = this.agent(wanted).tag;
+            let title = base;
+            for (let n = 2; existsSync(join(this.project.logDir, `${title}-${tag}.md`)); n++) {
+                title = `${base}-${n}`;
+            }
             this.live.delete('chat');
             await this.createSession('chat', wanted, title);
             ref = this.state.sessions.chat!;
@@ -594,6 +604,27 @@ export class Conductor {
         } finally {
             this.summaryBusy = false;
         }
+    }
+
+    private async closeChat() {
+        const ref = this.state.sessions.chat;
+        if (!ref) {
+            await this.chat.send('no chat session');
+            return;
+        }
+        const p = this.prefix('chat');
+        if (this.chatBusy) {
+            await this.session('chat').interrupt();
+            for (let i = 0; i < 100 && this.chatBusy; i++) {
+                await new Promise((r) => setTimeout(r, 100));
+            }
+        }
+        await this.exportLog('chat').catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
+        const log = this.state.sessions.chat?.logFile;
+        delete this.state.sessions.chat;
+        this.live.delete('chat');
+        this.store.save();
+        await this.chat.send(`${p} chat closed${log ? `; log: ${log}` : ''}`);
     }
 
     private async chatTurn(text: string) {

@@ -45,10 +45,11 @@ If another turn is running then, only the reply and the log are handled. Commits
 against the last commit the conductor saw for the session, so a commit made in such a turn (or
 one it missed) is still picked up at the end of the next one.
 
-`/chat [new] [agent] <message>` talks about the project in a separate read-only session (Claude
-Code plan mode, opencode's `plan` agent) that runs alongside the task flow: reply to its messages
-to continue, `/chat new` starts over, `/stop chat` interrupts it. It uses `roles.chat` (default:
-the planning agent), survives `/next`, and logs to `<task-id>-chat-<tag>.md`.
+`/chat [new] [agent] <message>` talks about the project in a separate read-only session (Claude Code
+plan mode, opencode's `plan` agent) that runs alongside the task flow: reply to its messages to
+continue, `/chat new` starts over, `/stop chat` interrupts it, `/chat stop` closes it (the log
+stays). It uses `roles.chat` (default: the planning agent), survives `/next`, and logs to
+`<task-id>-chat-<tag>.md`.
 
 `/summary [implement|review|plan|chat] [agent]` has a one-off read-only session (`roles.summary`,
 default: the chat agent) read the running session's log, or the focused one's, and post what is
