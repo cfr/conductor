@@ -32,6 +32,7 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /todo [id] - list PLAN.md "Next" items (or show one in full)
 /plan [agent] [topic] - planning discussion (edits PLAN.md only)
 /chat [new] [agent] <message> - read-only chat about the project, alongside running work
+/summary [role] [agent] - an agent reads the running (or focused) session's log and sums it up
 /plan done - write the agreed items, then commit / keep / discard
 /agents - configured agents and role defaults
 /status - current task, step, sessions, last gate
@@ -55,6 +56,7 @@ export class Conductor {
     private live = new Map<SessionRole, AgentSession>();
     private busy: Busy = null;
     private chatBusy = false;
+    private summaryBusy = false;
     private jobs: Jobs;
     private local: LocalConfig;
     private store: Store;
@@ -79,6 +81,7 @@ export class Conductor {
         chat.command('plan', (a) => this.plan(a));
         chat.command('todo', (a) => this.todo(a));
         chat.command('chat', (a) => this.chatCommand(a));
+        chat.command('summary', (a) => this.summary(a));
         chat.command('agents', async () => chat.send(this.agentList()));
         chat.command('status', async () => chat.send(this.status()));
         chat.command('stop', (a) => this.stop(a));
@@ -539,6 +542,58 @@ export class Conductor {
             return;
         }
         await this.chatTurn(rest);
+    }
+
+    private async summary(args: string) {
+        this.reload();
+        let target: SessionRole | undefined;
+        let agentName = this.project.roles.summary;
+        for (const word of args.trim().split(/\s+/).filter(Boolean)) {
+            if ([...roles, 'chat'].includes(word)) {
+                target = word as SessionRole;
+            } else if (this.project.agents.has(word)) {
+                agentName = word;
+            } else {
+                throw new Error(`/summary [implement|review|plan|chat] [agent]: unknown "${word}"`);
+            }
+        }
+        target ??= this.busy && roles.includes(this.busy) ? (this.busy as Role) : this.state.focus;
+        const ref = target ? this.state.sessions[target] : undefined;
+        if (!target || !ref) {
+            await this.chat.send(target ? `no ${target} session` : 'no session to summarize');
+            return;
+        }
+        if (this.summaryBusy) {
+            throw new Error('a summary is already being written');
+        }
+        this.summaryBusy = true;
+        try {
+            await this.exportLog(target);
+            const log = this.state.sessions[target]?.logFile;
+            if (!log) {
+                await this.chat.send(`${this.prefix(target)} has no transcript yet`);
+                return;
+            }
+            const agent = this.agent(agentName);
+            const p = `[${agent.tag} summary]`;
+            await this.chat.send(`${p} reading the ${target} session (${ref.title})…`);
+            const s = await this.adapters[agent.harness].create(agent, {
+                title: `${ref.title} summary`,
+                cwd: this.project.root,
+                asker: this.asker(target),
+                readOnly: true,
+            });
+            const task = this.state.task?.id ?? ref.title;
+            const r = await s.send(fill(this.project.prompts.summary, { log, role: target, task }));
+            if (r.text) {
+                await this.chat.sendMarkdown(p, r.text);
+            }
+            if (r.outcome !== 'succeeded') {
+                await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}`);
+            }
+        } finally {
+            this.summaryBusy = false;
+        }
     }
 
     private async chatTurn(text: string) {

@@ -30,8 +30,8 @@ export interface ProjectCommand {
 }
 
 export const builtinCommands = [
-    'help', 'start', 'next', 'review', 'fix', 'gate', 'todo', 'plan', 'chat', 'agents', 'status', 'stop',
-    'log',
+    'help', 'start', 'next', 'review', 'fix', 'gate', 'todo', 'plan', 'chat', 'summary', 'agents', 'status',
+    'stop', 'log',
 ];
 
 export interface GateStep {
@@ -48,13 +48,14 @@ export interface Prompts {
     plan: string;
     planDone: string;
     chat: string;
+    summary: string;
 }
 
 export interface ProjectConfig {
     root: string;
     logDir: string;
     gate: GateStep[];
-    roles: Record<Role | 'chat', string>;
+    roles: Record<Role | 'chat' | 'summary', string>;
     agents: Map<string, AgentConfig>;
     prompts: Prompts;
     commands: ProjectCommand[];
@@ -86,6 +87,11 @@ const defaultPrompts: Prompts = {
         'This is a read-only chat about the project. Another agent may be working in this tree right ' +
         'now, so uncommitted changes may be theirs. Do not edit files or run anything that changes ' +
         'state.\n\n{message}',
+    summary:
+        'Read {log}: the log of the {role} session for {task}, possibly still running. It can be long, ' +
+        'so start from the end and read back only as far as you need. Then tell me in a few short ' +
+        'bullets: the goal, what is done, what it is doing right now, and any problems or open ' +
+        'questions. Change nothing.',
 };
 
 export function expandHome(p: string): string {
@@ -215,7 +221,7 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
     }
 
     const r = table(t.roles, 'roles');
-    const roles = {} as Record<Role | 'chat', string>;
+    const roles = {} as Record<Role | 'chat' | 'summary', string>;
     for (const role of ['implement', 'review', 'plan'] as const) {
         roles[role] = str(r, role, 'roles');
         if (!agents.has(roles[role])) {
@@ -223,8 +229,11 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         }
     }
     roles.chat = r.chat === undefined ? roles.plan : str(r, 'chat', 'roles');
-    if (!agents.has(roles.chat)) {
-        throw new Error(`roles.chat names unknown agent "${roles.chat}"`);
+    roles.summary = r.summary === undefined ? roles.chat : str(r, 'summary', 'roles');
+    for (const role of ['chat', 'summary'] as const) {
+        if (!agents.has(roles[role])) {
+            throw new Error(`roles.${role} names unknown agent "${roles[role]}"`);
+        }
     }
 
     const p = table(t.prompts, 'prompts');
@@ -237,6 +246,7 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         plan: str(p, 'plan', 'prompts', defaultPrompts.plan),
         planDone: str(p, 'plan_done', 'prompts', defaultPrompts.planDone),
         chat: str(p, 'chat', 'prompts', defaultPrompts.chat),
+        summary: str(p, 'summary', 'prompts', defaultPrompts.summary),
     };
 
     const commands: ProjectCommand[] = [];

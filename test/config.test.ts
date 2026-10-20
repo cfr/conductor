@@ -30,6 +30,7 @@ test('parses agents, roles, ordered gate and default prompts', () => {
     assert.deepEqual(c.gate.map((g) => g.name), ['build', 'test']);
     assert.equal(c.agents.get('glm')?.tag, 'glm53');
     assert.equal(c.roles.review, 'opus');
+    assert.equal(c.roles.summary, c.roles.chat);
     assert.equal(c.logDir, '/repo/wlog');
     assert.equal(fill(c.prompts.implement, { id: '0048-antlion' }), 'please do 0048-antlion');
 });

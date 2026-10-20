@@ -188,6 +188,11 @@ opencode agents with its read-only `plan` agent, and its first message says anot
 changing the tree. It has its own busy flag, so it never waits for or blocks the task flow, and
 it is not reset by `/next`. Replies to its messages reach it; plain text keeps going to the task.
 
+`/summary [role] [agent]` asks how a session is going without disturbing it: the conductor exports
+that session's log as it stands (the running one by default, else the focused one), and a fresh
+read-only session of `roles.summary` (default: the chat agent) reads it from the end and answers
+in a few bullets. The summary session is one-off: not kept in state, not logged, not resumed.
+
 ## Planning discussion
 
 `/plan [agent] [topic]` opens a session (default `roles.plan`) that may read the repo and edit
