@@ -21,6 +21,16 @@ export function emptyNextMessage(plan: string): string {
         : 'PLAN.md "Next" is empty';
 }
 
+export function nextReport(plan: string): string {
+    const items = parseNext(plan);
+    const bullets = nextSection(plan).filter((l) => l.startsWith('- ')).length;
+    const lines = [items.length ? `"Next": ${items.map((i) => i.id).join(', ')}` : emptyNextMessage(plan)];
+    if (items.length && bullets > items.length) {
+        lines.push(`warning: ${bullets - items.length} "Next" item(s) do not start with \`- NNNN-slug:\`; /next skips them`);
+    }
+    return lines.join('\n');
+}
+
 export function parseNext(plan: string): PlanItem[] {
     const items: PlanItem[] = [];
     let current: string[] | null = null;
@@ -28,7 +38,8 @@ export function parseNext(plan: string): PlanItem[] {
         if (!current) {
             return;
         }
-        const m = /^- (\d{4})-([a-z0-9-]+):/.exec(current[0]);
+        // planners sometimes copy CHANGELOG's `- NNNN-slug (title):` form
+        const m = /^- (\d{4})-([a-z0-9]+(?:-[a-z0-9]+)*)(?=:| \()/.exec(current[0]);
         if (m) {
             items.push({ id: `${m[1]}-${m[2]}`, number: m[1], text: current.join('\n').trimEnd() });
         }
@@ -53,6 +64,6 @@ export function idNumber(id: string): string {
 }
 
 export function summary(item: PlanItem): string {
-    const first = item.text.split('\n')[0].replace(/^- \d{4}-[a-z0-9-]+:\s*/, '');
+    const first = item.text.split('\n')[0].replace(/^- \d{4}-[a-z0-9-]+:?\s*/, '');
     return `${item.id}: ${first}`;
 }

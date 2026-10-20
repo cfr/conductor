@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emptyNextMessage, parseNext, summary } from '../src/plan.ts';
+import { emptyNextMessage, nextReport, parseNext, summary } from '../src/plan.ts';
 import { chunk } from '../src/telegram.ts';
 
 const plan = `# plan
@@ -42,4 +42,15 @@ test('chunks long text at newlines', () => {
 test('explains a Next section whose items lack ids', () => {
     assert.match(emptyNextMessage('## Next\n\n- #0060 page shell: fix\n\n## Research\n'), /1 item\(s\), none/);
     assert.equal(emptyNextMessage('## Next\n\nnothing yet\n'), 'PLAN.md "Next" is empty');
+});
+
+test('accepts an item heading with a parenthesized title', () => {
+    const items = parseNext('## Next\n\n- 0064-beetle (rhinoceros beetle): the tank\n- 0065-x-y: z\n');
+    assert.deepEqual(items.map((i) => i.id), ['0064-beetle', '0065-x-y']);
+    assert.equal(summary(items[0]), '0064-beetle: (rhinoceros beetle): the tank');
+});
+
+test('reports parsed Next ids and items it would skip', () => {
+    const report = nextReport('## Next\n\n- 0067-a: one\n- #0068 b: two\n');
+    assert.equal(report, '"Next": 0067-a\nwarning: 1 "Next" item(s) do not start with `- NNNN-slug:`; /next skips them');
 });

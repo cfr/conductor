@@ -15,7 +15,7 @@ import {
 } from './config.ts';
 import { Jobs, logTail, readLog } from './jobs.ts';
 import { renderMarkdown } from './logs/markdown.ts';
-import { emptyNextMessage, idNumber, parseNext, summary, type PlanItem } from './plan.ts';
+import { emptyNextMessage, idNumber, nextReport, parseNext, summary, type PlanItem } from './plan.ts';
 import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
 import type { SessionRef, State, Store } from './state.ts';
@@ -476,6 +476,8 @@ export class Conductor {
             [
                 await repo.commitMessages(root, before),
                 ...(others.length ? ['', `warning: the commit also touches ${others.join(', ')}`] : []),
+                '',
+                nextReport(readFileSync(join(root, 'PLAN.md'), 'utf8')),
             ].join('\n'),
         );
         await this.chat.sendFile('PLAN.diff', await repo.diff(root, before), 'PLAN.md changes');
