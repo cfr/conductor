@@ -468,12 +468,39 @@ export class Conductor {
         const root = this.project.root;
         const before = await repo.head(root);
         await this.turn('plan', this.project.prompts.planDone, 'writing and committing PLAN.md');
-        const commits = await repo.commitsSince(root, before);
-        if (commits.length === 0) {
-            const dirty = (await repo.fileDiff(root, 'PLAN.md')).trim();
-            await this.chat.send(dirty ? 'PLAN.md changed but nothing was committed' : 'no commit; PLAN.md is unchanged');
+        if ((await repo.commitsSince(root, before)).length > 0) {
             return;
         }
+        if ((await repo.fileDiff(root, 'PLAN.md')).trim()) {
+            await this.chat.send('PLAN.md changed but nothing was committed');
+            return;
+        }
+        const start = this.state.sessions.plan?.startSha;
+        const earlier = start ? (await git(root, 'log', '--reverse', '--format=%h %s', `${start}..HEAD`, '--', 'PLAN.md')).trim() : '';
+        if (!earlier) {
+            await this.chat.send('no commit; PLAN.md is unchanged');
+            return;
+        }
+        await this.chat.send(
+            [
+                'nothing new to commit; this planning session already committed PLAN.md in:',
+                earlier,
+                '',
+                nextReport(readFileSync(join(root, 'PLAN.md'), 'utf8')),
+                this.nextHint(),
+            ]
+                .join('\n')
+                .trimEnd(),
+        );
+    }
+
+    private nextHint(): string {
+        const first = parseNext(readFileSync(join(this.project.root, 'PLAN.md'), 'utf8'))[0];
+        return first ? `/next to start ${first.id}` : '';
+    }
+
+    private async planCommitted(before: string) {
+        const root = this.project.root;
         const files = (await git(root, 'diff', '--name-only', before, 'HEAD')).split('\n').filter(Boolean);
         const others = files.filter((f) => f !== 'PLAN.md');
         await this.chat.send(
@@ -485,7 +512,12 @@ export class Conductor {
             ].join('\n'),
         );
         await this.chat.sendFile('PLAN.diff', await repo.diff(root, before), 'PLAN.md changes');
+        const commits = await repo.commitsSince(root, before);
         if ((await this.chat.ask('Keep the planning commit?', ['keep', 'undo commit'], false)) !== 'undo commit') {
+            const hint = this.nextHint();
+            if (hint) {
+                await this.chat.send(hint);
+            }
             return;
         }
         if ((await repo.head(root)) !== commits[0]) {
@@ -494,6 +526,11 @@ export class Conductor {
         }
         // --keep refuses instead of overwriting uncommitted changes to the same files
         await git(root, 'reset', '--keep', before);
+        const ref = this.state.sessions.plan;
+        if (ref) {
+            ref.checkedSha = before;
+            this.store.save();
+        }
         await this.chat.send(`planning commit undone; HEAD is back at ${before.slice(0, 7)}`);
     }
 
@@ -680,11 +717,19 @@ export class Conductor {
             this.busy = null;
         }
         if (gateFrom !== undefined) {
-            await this.gate(role, gateFrom, gateAttempt);
+            await this.afterCommits(role, gateFrom, gateAttempt);
         }
     }
 
-    // Returns the commit to gate from when the session committed since it was last checked.
+    private async afterCommits(role: Role, from: string, gateAttempt: number) {
+        if (role === 'plan') {
+            await this.planCommitted(from);
+        } else {
+            await this.gate(role, from, gateAttempt);
+        }
+    }
+
+    // Returns the commit before the session's new commits when it committed since it was last checked.
     private async settle(role: Role, r: TurnResult): Promise<string | undefined> {
         await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
         const p = this.prefix(role);
@@ -703,7 +748,6 @@ export class Conductor {
         this.store.save();
         if (role === 'plan') {
             await this.checkPlanOnly();
-            return undefined;
         }
         return committed ? from : undefined;
     }
@@ -746,7 +790,7 @@ export class Conductor {
             this.busy = null;
         }
         if (gateFrom !== undefined) {
-            await this.gate(role, gateFrom, 0);
+            await this.afterCommits(role, gateFrom, 0);
         }
     }
 

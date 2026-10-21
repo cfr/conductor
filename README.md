@@ -59,10 +59,12 @@ default: the chat agent) read the running session's log, or the focused one's, a
 going on: goal, progress, the current step, problems.
 
 `/todo` lists the `PLAN.md` "Next" items (`/todo <id>` shows one in full) without an agent.
-`/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` has the
-agent write the items and commit `PLAN.md` with a message following the project's rules, then
-shows the commit and offers to undo it. `/status`, `/stop`, `/agents` and `/log` do what they
-say.
+`/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` has the agent
+write the items and commit `PLAN.md` with a message following the project's rules. Whenever a
+planning turn commits (also when you asked for the commit in plain text), the conductor shows the
+commit, warns about files other than `PLAN.md`, offers to undo it and, when kept, names the `/next`
+item. A `/plan done` with nothing left to write lists the session's earlier planning commits.
+`/status`, `/stop`, `/agents` and `/log` do what they say.
 
 Project commands come from `[commands.<name>]` in `CONDUCTOR.md` (`cmd`, `description`,
 `confirm` for a yes/no button first, `background` for long-running ones, `ready` a regular
