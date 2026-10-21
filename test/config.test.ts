@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { extractTomlBlock, fill, parseEnvFile, parseProjectConfig } from '../src/config.ts';
 
 const md = (toml: string) => `# Conductor\n\nprose\n\n\`\`\`toml\n${toml}\n\`\`\`\n`;
@@ -88,4 +89,16 @@ ready = "open https://"
     assert.throws(() => parseProjectConfig('/r', md(base + '[commands.d]\ncmd = "x"\nready = "y"\n')), /background/);
     assert.throws(() => parseProjectConfig('/r', md(base + '[commands.review]\ncmd = "x"\n')), /built-in/);
     assert.throws(() => parseProjectConfig('/r', md(base + '[commands.Deploy]\ncmd = "x"\n')), /lowercase/);
+});
+
+test('the example spells out every prompt as its default', () => {
+    const example = readFileSync(new URL('../CONDUCTOR.example.md', import.meta.url), 'utf8');
+    const bare = example.replace(/\[prompts\][\s\S]*?(?=^````)/m, '');
+    assert.notEqual(bare, example);
+    assert.equal(parseProjectConfig('/p', example).prompts.fixNotes, 'please fix {notes}; then commit');
+    assert.deepEqual(parseProjectConfig('/p', example).prompts, parseProjectConfig('/p', bare).prompts);
+    const keys = [...example.matchAll(/^(\w+) = /gm)].map((m) => m[1]);
+    for (const k of ['implement', 'review', 'fix', 'fix_notes', 'gate_failed', 'plan', 'plan_done', 'chat', 'summary']) {
+        assert.ok(keys.includes(k), k);
+    }
 });

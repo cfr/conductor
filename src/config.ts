@@ -73,7 +73,7 @@ const defaultPrompts: Prompts = {
     implement: 'please do {id}',
     review: 'please review {id}',
     fix: 'please fix all issues, commit',
-    fixNotes: '{notes}\n\nThen commit.',
+    fixNotes: 'please fix {notes}; then commit',
     gateFailed:
         'The verification gate failed after your last turn (step `{step}`). Fix it and commit. ' +
         'Output tail:\n\n```\n{output}\n```',
@@ -162,11 +162,11 @@ export function loadLocalConfig(file: string): LocalConfig {
 }
 
 export function extractTomlBlock(markdown: string): string {
-    const blocks = [...markdown.matchAll(/^```toml[^\n]*\n([\s\S]*?)^```\s*$/gm)];
+    const blocks = [...markdown.matchAll(/^(`{3,})toml[^\n]*\n([\s\S]*?)^\1\s*$/gm)];
     if (blocks.length !== 1) {
         throw new Error(`CONDUCTOR.md must contain exactly one \`\`\`toml block, found ${blocks.length}`);
     }
-    return blocks[0][1];
+    return blocks[0][2];
 }
 
 export function parseProjectConfig(root: string, markdown: string): ProjectConfig {

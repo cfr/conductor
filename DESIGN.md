@@ -62,8 +62,9 @@ tag = "opus55"
 - `variant` (optional, `opencode` only) picks the model variant opencode offers (`default`, or
   e.g. `low`/`high`/`max` thinking); checked against opencode's model list when a session starts.
 - `[prompts]` overrides the text sent at each step (`implement`, `review`, `fix`, `fix_notes`,
-  `gate_failed`, `plan`, `plan_done`); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}` and
-  `{topic}` are filled in. `[logs] dir` sets the log directory (default `wlog`).
+  `gate_failed`, `plan`, `plan_done`, `chat`, `summary`; `CONDUCTOR.example.md` lists the
+  defaults); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}`, `{topic}`, `{message}`, `{log}`,
+  `{role}` and `{task}` are filled in. `[logs] dir` sets the log directory (default `wlog`).
 - `tag` names the model everywhere it shows: the suffix in `wlog/` file names (so existing
   names like `glm53` and `opus55` carry on) and the prefix of chat messages (`[glm53 0038]`).
 - `[gate]` is the verification the bridge runs after each committing step, in order; a
