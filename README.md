@@ -39,6 +39,9 @@ Then `/help` in the chat. The usual loop:
 - `/gate` runs the gate on the current session's commits by hand and continues from there (the
   review starts after an implementation), e.g. after fixing something yourself
 
+Every turn the conductor starts posts its prompt under the "implementing…", "fixing…" line as a
+collapsed quote (cut at one message), so you can see what the agent was told.
+
 When opencode resumes a session by itself (a background job the agent started finished), the
 conductor posts that and handles the end of that turn like any other: reply, log, gate, review.
 If another turn is running then, only the reply and the log are handled. Commits are checked

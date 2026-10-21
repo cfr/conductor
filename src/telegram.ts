@@ -12,6 +12,7 @@ export interface Messenger {
     command(name: string, handler: CommandHandler): void;
     send(text: string, route?: string): Promise<void>;
     sendMarkdown(prefix: string, markdown: string, route?: string): Promise<void>;
+    sendQuoted(text: string, quote: string, route?: string): Promise<void>;
     sendFile(name: string, content: string, caption?: string, route?: string): Promise<void>;
     ask(text: string, choices: string[], allowText: boolean): Promise<string>;
     pendingQuestions(): number;
@@ -138,6 +139,29 @@ export class Chat implements Messenger {
         }
         if (attachment !== undefined) {
             await this.sendFile('message.md', attachment, undefined, route);
+        }
+    }
+
+    async sendQuoted(text: string, quote: string, route?: string): Promise<void> {
+        const room = maxMessage - text.length - 100;
+        const body = quote.length > room ? `${quote.slice(0, room)}… (${quote.length - room} more chars)` : quote;
+        let msg;
+        try {
+            msg = await this.bot.api.sendMessage(
+                this.userId,
+                `${escapeHtml(text)}\n<blockquote expandable>${escapeHtml(body)}</blockquote>`,
+                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } },
+            );
+        } catch (e) {
+            if (!(e instanceof GrammyError && e.error_code === 400)) {
+                throw e;
+            }
+            msg = await this.bot.api.sendMessage(this.userId, `${text}\n${body}`, {
+                link_preview_options: { is_disabled: true },
+            });
+        }
+        if (route) {
+            this.routes.set(msg.message_id, route);
         }
     }
 

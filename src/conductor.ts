@@ -658,7 +658,7 @@ export class Conductor {
             await this.chat.send('no session to talk to; /next, /review or /plan');
             return;
         }
-        await this.turn(role, text, 'working');
+        await this.turn(role, text, 'working', 0, false);
     }
 
     private detach(p: Promise<void>) {
@@ -668,9 +668,10 @@ export class Conductor {
         });
     }
 
-    private async turn(role: Role, text: string, doing: string, gateAttempt = 0) {
+    private async turn(role: Role, text: string, doing: string, gateAttempt = 0, quote = true) {
         this.claim(role);
-        await this.chat.send(`${this.prefix(role)} ${doing}…`, role);
+        const head = `${this.prefix(role)} ${doing}…`;
+        await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
         let gateFrom: string | undefined;
         try {
             const r = await this.session(role).send(text);
