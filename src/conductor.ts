@@ -803,18 +803,20 @@ export class Conductor {
     private async turn(role: Role, text: string, doing: string, gateAttempt = 0, quote = true) {
         this.claim(role);
         let r: TurnResult;
-        let gateFrom: string | undefined;
+        let settled: { waiting: boolean; from?: string };
         try {
             const head = `${this.prefix(role)} ${doing}…`;
             await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
             this.markTurn(role, { since: Date.now(), doing });
             r = await this.session(role).send(text);
-            gateFrom = await this.settle(role, r);
+            settled = await this.settle(role, r);
         } finally {
             this.markTurn(role, undefined);
             this.busy = null;
         }
-        await this.afterTurn(role, r, gateFrom, gateAttempt);
+        if (!settled.waiting) {
+            await this.afterTurn(role, r, settled.from, gateAttempt);
+        }
     }
 
     private async afterTurn(role: Role, r: TurnResult, gateFrom: string | undefined, gateAttempt: number) {
@@ -877,8 +879,8 @@ export class Conductor {
         }
     }
 
-    // Returns the commit before the session's new commits when it committed since it was last checked.
-    private async settle(role: Role, r: TurnResult): Promise<string | undefined> {
+    // `from`: the commit before the session's new commits, when it committed since it was last checked.
+    private async settle(role: Role, r: TurnResult): Promise<{ waiting: boolean; from?: string }> {
         await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
         const p = this.prefix(role);
         if (r.text) {
@@ -886,7 +888,13 @@ export class Conductor {
         }
         if (r.outcome !== 'succeeded') {
             await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}; /continue to resume it`, role);
-            return undefined;
+            return { waiting: false };
+        }
+        const jobs = await this.session(role).backgroundJobs().catch(() => []);
+        if (jobs.length) {
+            const list = jobs.map((j) => `  ${j.split('\n')[0].slice(0, 120)}`).join('\n');
+            await this.chat.send(`${p} ended its turn with background jobs running; waiting for it to resume when they exit:\n${list}`, role);
+            return { waiting: true };
         }
         const root = this.project.root;
         const ref = this.state.sessions[role]!;
@@ -900,7 +908,7 @@ export class Conductor {
         if (role === 'feedback' && committed) {
             await this.chat.send(`warning: the feedback check committed (it should only report):\n${await repo.commitMessages(root, from)}`);
         }
-        return committed ? from : undefined;
+        return { waiting: false, from: committed ? from : undefined };
     }
 
     private async unsolicited(sessionId: string, ev: UnsolicitedEvent) {
@@ -920,7 +928,8 @@ export class Conductor {
         const role: Role = found;
         const p = this.prefix(role);
         if (ev.phase === 'started') {
-            await this.chat.send(`${p} resumed on its own (e.g. a background job finished)…`, role);
+            const clash = this.busy && this.busy !== role ? `; warning: ${this.busy} is running too, so two agents are in the tree` : '';
+            await this.chat.send(`${p} resumed on its own (e.g. a background job finished)…${clash}`, role);
             return;
         }
         this.markTurn(role, undefined);
@@ -935,14 +944,16 @@ export class Conductor {
         }
         this.claim(role);
         let r: TurnResult;
-        let gateFrom: string | undefined;
+        let settled: { waiting: boolean; from?: string };
         try {
             r = { outcome: ev.outcome, error: ev.error, text: await this.session(role).lastReply() };
-            gateFrom = await this.settle(role, r);
+            settled = await this.settle(role, r);
         } finally {
             this.busy = null;
         }
-        await this.afterTurn(role, r, gateFrom, 0);
+        if (!settled.waiting) {
+            await this.afterTurn(role, r, settled.from, 0);
+        }
     }
 
     private async gateCommand() {

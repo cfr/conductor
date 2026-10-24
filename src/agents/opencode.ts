@@ -214,7 +214,7 @@ export class OpencodeAdapter implements Adapter {
     resume(agent: AgentConfig, id: string, opts: SessionOptions): AgentSession {
         this.ensureEvents();
         this.askers.set(id, opts.asker);
-        return new OpencodeSession(this, agent, id);
+        return new OpencodeSession(this, agent, id, opts.cwd);
     }
 
     waitForEnd(sid: string, since: number): Promise<{ outcome: TurnResult['outcome']; error?: string }> {
@@ -250,11 +250,13 @@ class OpencodeSession implements AgentSession {
     private oc: OpencodeAdapter;
     readonly agent: AgentConfig;
     readonly id: string;
+    private cwd: string;
 
-    constructor(oc: OpencodeAdapter, agent: AgentConfig, id: string) {
+    constructor(oc: OpencodeAdapter, agent: AgentConfig, id: string, cwd: string) {
         this.oc = oc;
         this.agent = agent;
         this.id = id;
+        this.cwd = cwd;
     }
 
     async send(text: string): Promise<TurnResult> {
@@ -298,6 +300,14 @@ class OpencodeSession implements AgentSession {
 
     async interrupt(): Promise<void> {
         await this.oc.api('POST', `/api/session/${this.id}/interrupt`);
+    }
+
+    async backgroundJobs(): Promise<string[]> {
+        const res = await this.oc.api<{ data: { status: string; command: string; metadata?: { sessionID?: string } }[] }>(
+            'GET',
+            `/api/shell?${new URLSearchParams({ 'location[directory]': this.cwd })}`,
+        );
+        return res.data.filter((s) => s.status === 'running' && s.metadata?.sessionID === this.id).map((s) => s.command);
     }
 
     async turnState(): Promise<TurnState> {

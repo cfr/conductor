@@ -140,6 +140,10 @@ class ClaudeSession implements AgentSession {
         this.abort?.abort();
     }
 
+    async backgroundJobs(): Promise<string[]> {
+        return [];
+    }
+
     // The SDK's claude process dies with the conductor, so a lost turn never runs on.
     async turnState(): Promise<TurnState> {
         const last = readClaudeTranscript(this.id)?.messages.at(-1);

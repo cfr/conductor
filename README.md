@@ -53,10 +53,13 @@ its reply, log, gate and review as if nothing happened; a Claude Code turn dies 
 and is reported as interrupted, ready for `/continue`.
 
 When opencode resumes a session by itself (a background job the agent started finished), the
-conductor posts that and handles the end of that turn like any other: reply, log, gate, review.
-If another turn is running then, only the reply and the log are handled. Commits are checked
-against the last commit the conductor saw for the session, so a commit made in such a turn (or
-one it missed) is still picked up at the end of the next one.
+conductor posts that and handles the end of that turn like any other: reply, log, gate, review. A
+turn that ends while its own background jobs still run (an agent waiting on a test run it started)
+is not taken as finished: the conductor names the jobs and waits for that resume instead of moving
+on to the gate, feedback or review. If another turn is running when a session resumes, only the
+reply and the log are handled, with a warning that two agents are in the tree. Commits are checked
+against the last commit the conductor saw for the session, so a commit made in such a turn (or one
+it missed) is still picked up at the end of the next one.
 
 `/chat [new] [agent] <message>` talks about the project in a separate read-only session (Claude Code
 plan mode, opencode's `plan` agent) that runs alongside the task flow: reply to its messages to

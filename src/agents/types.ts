@@ -46,6 +46,8 @@ export interface AgentSession {
     transcript(): Promise<Transcript | undefined>;
     // For a turn begun at `since` (ms) whose end the conductor missed, e.g. across a restart.
     turnState(since: number): Promise<TurnState>;
+    // Commands of the session's background jobs still running; the harness resumes the session when one exits.
+    backgroundJobs(): Promise<string[]>;
 }
 
 export type UnsolicitedEvent =
