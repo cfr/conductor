@@ -41,6 +41,7 @@ export interface Messenger {
     sendMarkdown(prefix: string, markdown: string, route?: string): Promise<void>;
     sendQuoted(text: string, quote: string, route?: string): Promise<void>;
     sendLog(text: string, log: string, route?: string): Promise<void>;
+    sendHtml(html: string, route?: string): Promise<void>;
     sendFile(name: string, content: string, caption?: string, route?: string): Promise<void>;
     ask(text: string, choices: string[], allowText: boolean): Promise<string>;
     pendingQuestions(): number;
@@ -184,6 +185,26 @@ export class Chat implements Messenger {
         const room = maxMessage - text.length - 100;
         const body = log.length > room ? `…${log.slice(log.length - room)}` : log;
         return this.sendWrapped(text, body, '<pre>', '</pre>', route);
+    }
+
+    async sendHtml(html: string, route?: string): Promise<void> {
+        let msg;
+        try {
+            msg = await this.bot.api.sendMessage(this.userId, html, {
+                parse_mode: 'HTML',
+                link_preview_options: { is_disabled: true },
+            });
+        } catch (e) {
+            if (!(e instanceof GrammyError && e.error_code === 400)) {
+                throw e;
+            }
+            msg = await this.bot.api.sendMessage(this.userId, stripHtml(html), {
+                link_preview_options: { is_disabled: true },
+            });
+        }
+        if (route) {
+            this.routes.set(msg.message_id, route);
+        }
     }
 
     private async sendWrapped(text: string, body: string, open: string, close: string, route?: string) {

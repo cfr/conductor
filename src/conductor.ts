@@ -13,6 +13,7 @@ import {
     type Role,
     type SessionRole,
 } from './config.ts';
+import { escapeHtml } from './format.ts';
 import { Jobs, logTail, readLog } from './jobs.ts';
 import { renderMarkdown } from './logs/markdown.ts';
 import { emptyNextMessage, idNumber, nextReport, parseNext, summary, type PlanItem } from './plan.ts';
@@ -88,7 +89,7 @@ export class Conductor {
         chat.command('chat', (a) => this.chatCommand(a));
         chat.command('summary', (a) => this.summary(a));
         chat.command('agents', async () => chat.send(this.agentList()));
-        chat.command('status', async () => chat.send(this.status()));
+        chat.command('status', async () => chat.sendHtml(this.status()));
         chat.command('stop', (a) => this.stop(a));
         chat.command('log', () => this.exportAll());
         chat.onText = (text, route) => this.text(text, route as SessionRole | undefined);
@@ -758,7 +759,7 @@ export class Conductor {
         delete this.state.sessions.chat;
         this.live.delete('chat');
         this.store.save();
-        await this.chat.send(`${p} chat closed${log ? `; log: ${log}` : ''}`);
+        await this.chat.sendHtml(`${escapeHtml(p)} chat closed${log ? `; log: ${code(log)}` : ''}`);
     }
 
     private async chatTurn(text: string) {
@@ -1090,7 +1091,7 @@ export class Conductor {
                 done.push(f);
             }
         }
-        await this.chat.send(done.length ? `exported:\n${done.join('\n')}` : 'no sessions');
+        await this.chat.sendHtml(done.length ? `exported:\n${done.map(code).join('\n')}` : 'no sessions');
     }
 
     private async stop(args = '') {
@@ -1123,13 +1124,13 @@ export class Conductor {
     private status(): string {
         const s = this.state;
         const lines = [
-            `project: ${this.project.root}`,
-            `task: ${s.task?.id ?? '-'}`,
-            `running: ${this.busy ?? 'nothing'}${this.chat.pendingQuestions() ? ` (${this.chat.pendingQuestions()} question(s) waiting)` : ''}`,
+            `project: ${code(this.project.root)}`,
+            `task: ${escapeHtml(s.task?.id ?? '-')}`,
+            `running: ${escapeHtml(this.busy ?? 'nothing')}${this.chat.pendingQuestions() ? ` (${this.chat.pendingQuestions()} question(s) waiting)` : ''}`,
             `focus: ${s.focus ?? '-'}${this.chatBusy ? ' (chat answering)' : ''}`,
         ];
         for (const [role, ref] of Object.entries(s.sessions)) {
-            lines.push(`${role}: ${this.agent(ref.agent).tag} ${ref.id}${ref.logFile ? `\n  log ${ref.logFile}` : ''}`);
+            lines.push(`${role}: ${this.agent(ref.agent).tag} ${ref.id}${ref.logFile ? `\n  log ${code(ref.logFile)}` : ''}`);
         }
         for (const c of this.project.commands) {
             const job = this.jobs.get(c.name);
@@ -1139,7 +1140,7 @@ export class Conductor {
         }
         if (s.lastGate) {
             const g = s.lastGate;
-            lines.push(`last gate: ${g.ok ? 'passed' : `failed at ${g.step}`} at ${g.sha.slice(0, 7)} (${g.at})`);
+            lines.push(`last gate: ${g.ok ? 'passed' : `failed at ${escapeHtml(g.step ?? '?')}`} at ${g.sha.slice(0, 7)} (${g.at})`);
         }
         return lines.join('\n');
     }
@@ -1162,4 +1163,8 @@ export class Conductor {
         await this.chat.takeOver(text, [...commands].map(([command, description]) => ({ command, description })));
         await this.recoverTurns();
     }
+}
+
+function code(text: string): string {
+    return `<code>${escapeHtml(text)}</code>`;
 }
