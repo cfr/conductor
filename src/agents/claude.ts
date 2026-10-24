@@ -91,14 +91,26 @@ class ClaudeSession implements AgentSession {
             ...(this.started ? { resume: this.id } : { sessionId: this.id, title: this.opts.title }),
         };
         let result: TurnResult = { outcome: 'failed', text: '', error: 'no result message' };
+        // `result` holds only the last text block; a reply split around a closing line would lose its body.
+        let reply: string[] = [];
         try {
             for await (const m of query({ prompt: text, options })) {
+                if (m.type === 'assistant') {
+                    for (const block of m.message.content) {
+                        if (block.type === 'tool_use') {
+                            reply = [];
+                        } else if (block.type === 'text' && block.text.trim()) {
+                            reply.push(block.text);
+                        }
+                    }
+                    continue;
+                }
                 if (m.type !== 'result') {
                     continue;
                 }
                 this.started = true;
                 if (m.subtype === 'success') {
-                    result = { outcome: 'succeeded', text: m.result };
+                    result = { outcome: 'succeeded', text: reply.length ? reply.join('\n\n') : m.result };
                 } else {
                     result = { outcome: 'failed', text: '', error: m.subtype };
                 }

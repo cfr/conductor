@@ -88,7 +88,7 @@ const defaultPrompts: Prompts = {
         'now, so uncommitted changes may be theirs. Do not edit files or run anything that changes ' +
         'state.\n\n{message}',
     summary:
-        'Read {log}: the log of the {role} session for {task}, possibly still running. It can be long, ' +
+        'Read {log}: the log of the {role} session for {task}, which is {state}. It can be long, ' +
         'so start from the end and read back only as far as you need. Then tell me in a few short ' +
         'bullets: the goal, what is done, what it is doing right now, and any problems or open ' +
         'questions. Change nothing.',

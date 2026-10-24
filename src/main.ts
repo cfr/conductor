@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { loadLocalConfig } from './config.ts';
 import { Conductor } from './conductor.ts';
 import { Store } from './state.ts';
-import { Chat } from './telegram.ts';
+import { Chat, describeError } from './telegram.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const configFile = resolve(process.env.CONDUCTOR_CONFIG ?? resolve(here, '..', 'conductor.toml'));
@@ -31,12 +31,15 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(sig, () => void quit(0));
 }
 
+// A failure nothing awaited (a Telegram send that ran out of retries) must not kill running agent turns.
+process.on('unhandledRejection', (e) => console.error('unhandled:', describeError(e)));
+
 try {
     await chat.start(() => {
         console.log(`conductor: polling Telegram for ${local.project}`);
         conductor.announce().catch((e: Error) => console.error('announce:', e.message));
     });
 } catch (e) {
-    console.error((e as Error).message);
+    console.error(describeError(e));
     await quit(1);
 }

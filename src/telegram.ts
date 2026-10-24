@@ -1,8 +1,35 @@
-import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy';
+import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile, type Transformer } from 'grammy';
 import { escapeHtml, markdownToHtml } from './format.ts';
 
 const maxMessage = 4000;
 const maxChunks = 3;
+const retryDelays = [1, 2, 5, 10, 20, 30, 60, 60].map((s) => s * 1000);
+
+// The nested fetch error's message carries the request URL, and with it the bot token.
+// getUpdates is left to the poller, which retries on its own.
+export function retryNetwork(delays = retryDelays): Transformer {
+    return async (prev, method, payload, signal) => {
+        for (let attempt = 0; ; attempt++) {
+            try {
+                return await prev(method, payload, signal);
+            } catch (e) {
+                if (!(e instanceof HttpError) || method === 'getUpdates' || attempt >= delays.length) {
+                    throw e;
+                }
+                console.error(`telegram: ${method} failed (${describeError(e)}); retrying`);
+                await new Promise((r) => setTimeout(r, delays[attempt]));
+            }
+        }
+    };
+}
+
+export function describeError(e: unknown): string {
+    if (e instanceof HttpError) {
+        const cause = (e.error as Error | undefined)?.message ?? '';
+        return `${e.message} ${cause.replace(/\/bot[^/\s]+/g, '/bot***')}`.trim();
+    }
+    return e instanceof Error ? e.message : String(e);
+}
 
 export type CommandHandler = (args: string) => Promise<void>;
 export type TextHandler = (text: string, route: string | undefined) => Promise<void>;
@@ -64,6 +91,7 @@ export class Chat implements Messenger {
     constructor(token: string, userId: number) {
         this.userId = userId;
         this.bot = new Bot(token);
+        this.bot.api.config.use(retryNetwork());
         this.bot.use(async (ctx, next) => {
             if (ctx.from?.id === this.userId) {
                 await next();
@@ -103,13 +131,13 @@ export class Chat implements Messenger {
             }
             this.detach(this.onText(text, route));
         });
-        this.bot.catch((err) => console.error('telegram:', err.message));
+        this.bot.catch((err) => console.error('telegram:', describeError(err.error)));
     }
 
     private detach(p: Promise<void>) {
-        p.catch((e: Error) => {
-            console.error(e);
-            void this.send(`error: ${e.message}`);
+        p.catch((e: unknown) => {
+            console.error('error:', describeError(e));
+            this.send(`error: ${describeError(e)}`).catch(() => {});
         });
     }
 

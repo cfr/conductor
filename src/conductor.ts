@@ -19,7 +19,7 @@ import { emptyNextMessage, idNumber, nextReport, parseNext, summary, type PlanIt
 import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
 import type { SessionRef, State, Store } from './state.ts';
-import type { Messenger } from './telegram.ts';
+import { describeError, type Messenger } from './telegram.ts';
 
 type Busy = Role | 'gate' | `/${string}` | null;
 
@@ -631,7 +631,9 @@ export class Conductor {
                 readOnly: true,
             });
             const task = this.state.task?.id ?? ref.title;
-            const r = await s.send(fill(this.project.prompts.summary, { log, role: target, task }));
+            const running = this.busy === target || (target === 'chat' && this.chatBusy);
+            const state = running ? 'still running' : 'idle (its last turn has ended)';
+            const r = await s.send(fill(this.project.prompts.summary, { log, role: target, task, state }));
             if (r.text) {
                 await this.chat.sendMarkdown(p, r.text);
             }
@@ -699,9 +701,9 @@ export class Conductor {
     }
 
     private detach(p: Promise<void>) {
-        p.catch((e: Error) => {
-            console.error(e);
-            void this.chat.send(`error: ${e.message}`);
+        p.catch((e: unknown) => {
+            console.error('error:', describeError(e));
+            this.chat.send(`error: ${describeError(e)}`).catch(() => {});
         });
     }
 
