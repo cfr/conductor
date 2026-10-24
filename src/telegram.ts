@@ -40,6 +40,7 @@ export interface Messenger {
     send(text: string, route?: string): Promise<void>;
     sendMarkdown(prefix: string, markdown: string, route?: string): Promise<void>;
     sendQuoted(text: string, quote: string, route?: string): Promise<void>;
+    sendLog(text: string, log: string, route?: string): Promise<void>;
     sendFile(name: string, content: string, caption?: string, route?: string): Promise<void>;
     ask(text: string, choices: string[], allowText: boolean): Promise<string>;
     pendingQuestions(): number;
@@ -170,16 +171,28 @@ export class Chat implements Messenger {
         }
     }
 
-    async sendQuoted(text: string, quote: string, route?: string): Promise<void> {
+    sendQuoted(text: string, quote: string, route?: string): Promise<void> {
         const room = maxMessage - text.length - 100;
         const body = quote.length > room ? `${quote.slice(0, room)}… (${quote.length - room} more chars)` : quote;
+        return this.sendWrapped(text, body, '<blockquote expandable>', '</blockquote>', route);
+    }
+
+    sendLog(text: string, log: string, route?: string): Promise<void> {
+        if (!log) {
+            return this.send(text, route);
+        }
+        const room = maxMessage - text.length - 100;
+        const body = log.length > room ? `…${log.slice(log.length - room)}` : log;
+        return this.sendWrapped(text, body, '<pre>', '</pre>', route);
+    }
+
+    private async sendWrapped(text: string, body: string, open: string, close: string, route?: string) {
         let msg;
         try {
-            msg = await this.bot.api.sendMessage(
-                this.userId,
-                `${escapeHtml(text)}\n<blockquote expandable>${escapeHtml(body)}</blockquote>`,
-                { parse_mode: 'HTML', link_preview_options: { is_disabled: true } },
-            );
+            msg = await this.bot.api.sendMessage(this.userId, `${escapeHtml(text)}\n${open}${escapeHtml(body)}${close}`, {
+                parse_mode: 'HTML',
+                link_preview_options: { is_disabled: true },
+            });
         } catch (e) {
             if (!(e instanceof GrammyError && e.error_code === 400)) {
                 throw e;

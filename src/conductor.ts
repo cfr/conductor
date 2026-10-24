@@ -142,7 +142,7 @@ export class Conductor {
             const r = await this.jobs.run(c.name, cmd, this.project.root);
             const secs = ((Date.now() - started) / 1000).toFixed(0);
             const outcome = r.code === 0 ? 'done' : `failed (exit ${r.code})`;
-            await this.chat.send(`/${c.name}: ${outcome} in ${secs} s\n\n${logTail(r.log, 20)}`);
+            await this.chat.sendLog(`/${c.name}: ${outcome} in ${secs} s`, logTail(r.log, 20));
             const full = readFileSync(r.log, 'utf8');
             if (full.split('\n').length > 21) {
                 await this.chat.sendFile(`${c.name}.log`, full);
@@ -155,13 +155,15 @@ export class Conductor {
     private async backgroundCommand(c: ProjectCommand, args: string) {
         const running = this.jobs.get(c.name);
         if (args === 'stop') {
-            await this.chat.send((await this.jobs.stop(c.name)) ? `/${c.name}: stopping…` : `/${c.name} is not running`);
+            if (!(await this.jobs.stop(c.name))) {
+                await this.chat.send(`/${c.name} is not running`);
+            }
             return;
         }
         if (running) {
             const mins = ((Date.now() - running.started) / 60000).toFixed(0);
             const note = args && args !== 'status' ? '\n(already running; /' + c.name + ' stop first)' : '';
-            await this.chat.send(`/${c.name}: running for ${mins} min (pid ${running.child.pid})${note}\n\n${logTail(running.log, 15)}`);
+            await this.chat.sendLog(`/${c.name}: running for ${mins} min (pid ${running.child.pid})${note}`, logTail(running.log, 15));
             return;
         }
         const cmd = this.commandLine(c, args === 'status' ? '' : args);
@@ -171,12 +173,12 @@ export class Conductor {
         await this.chat.send(`/${c.name}: starting…`);
         const job = this.jobs.start(c.name, cmd, this.project.root, (j, code) => {
             const how = j.stopping ? 'stopped' : `exited (code ${code})`;
-            void this.chat.send(`/${c.name}: ${how}\n\n${logTail(j.log, 15)}`);
+            void this.chat.sendLog(`/${c.name}: ${how}`, logTail(j.log, 15));
         });
         if (!c.ready) {
             setTimeout(() => {
                 if (this.jobs.get(c.name) === job) {
-                    void this.chat.send(`/${c.name}: running (pid ${job.child.pid})\n\n${logTail(job.log, 15)}`);
+                    void this.chat.sendLog(`/${c.name}: running (pid ${job.child.pid})`, logTail(job.log, 15));
                 }
             }, 5000);
             return;
@@ -193,7 +195,7 @@ export class Conductor {
                 clearInterval(poll);
                 // the matched line and what follows it, e.g. a URL list
                 const fromMatch = log.slice(log.lastIndexOf('\n', m.index) + 1).trimEnd().split('\n').slice(0, 15);
-                void this.chat.send(`/${c.name}: ready (pid ${job.child.pid})\n\n${fromMatch.join('\n')}`);
+                void this.chat.sendLog(`/${c.name}: ready (pid ${job.child.pid})`, fromMatch.join('\n'));
             }
         }, 1000);
     }
