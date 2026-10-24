@@ -31,7 +31,10 @@ Then `/help` in the chat. The usual loop:
 - `/next [agent] [id]`: confirm, and the implementing agent starts on the first `PLAN.md` "Next"
   item (or the given one)
 - after a turn that committed, the gate runs; a failure goes back to the agent once
-- when the gate passes, the review starts by itself and its findings are posted
+- when the gate passes, the feedback agent (`roles.feedback`, if set) checks the work and reports;
+  the implementer fixes and commits, the gate runs, and this repeats up to `[flow]
+  feedback_rounds` times or until the check comes back clean; `/feedback [agent]` adds a round
+- then the review starts by itself and its findings are posted
 - `/fix [notes]`: the reviewer fixes and commits, the gate runs again
 - `/continue [role] [notes]` resumes a turn that stopped early (a provider error, `/stop`, a
   restart); a failed or interrupted turn says so with this hint
@@ -61,9 +64,9 @@ continue, `/chat new` starts over, `/stop chat` interrupts it, `/chat stop` clos
 stays). It uses `roles.chat` (default: the planning agent), survives `/next`, and logs to
 `<task-id>-chat-<tag>.md`.
 
-`/summary [implement|review|plan|chat] [agent]` has a one-off read-only session (`roles.summary`,
-default: the chat agent) read the running session's log, or the focused one's, and post what is
-going on: goal, progress, the current step, problems.
+`/summary [implement|feedback|review|plan|chat] [agent]` has a one-off read-only session
+(`roles.summary`, default: the chat agent) read the running session's log, or the focused one's, and
+post what is going on: goal, progress, the current step, problems.
 
 `/todo` lists the `PLAN.md` "Next" items (`/todo <id>` shows one in full) without an agent.
 `/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` has the agent

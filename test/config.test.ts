@@ -98,7 +98,18 @@ test('the example spells out every prompt as its default', () => {
     assert.equal(parseProjectConfig('/p', example).prompts.fixNotes, 'please fix {notes}; then commit');
     assert.deepEqual(parseProjectConfig('/p', example).prompts, parseProjectConfig('/p', bare).prompts);
     const keys = [...example.matchAll(/^(\w+) = /gm)].map((m) => m[1]);
-    for (const k of ['implement', 'review', 'fix', 'fix_notes', 'continue', 'gate_failed', 'plan', 'plan_done', 'chat', 'summary']) {
+    for (const k of ['implement', 'review', 'fix', 'fix_notes', 'feedback', 'feedback_again', 'feedback_fix', 'continue', 'gate_failed', 'plan', 'plan_done', 'chat', 'summary']) {
         assert.ok(keys.includes(k), k);
     }
+});
+
+test('feedback rounds need a feedback agent and default to one', () => {
+    const withFeedback = base.replace('plan = "opus"', 'plan = "opus"\nfeedback = "glm"');
+    assert.equal(parseProjectConfig('/r', md(base)).feedbackRounds, 0);
+    assert.equal(parseProjectConfig('/r', md(withFeedback)).feedbackRounds, 1);
+    assert.equal(parseProjectConfig('/r', md(`${withFeedback}\n[flow]\nfeedback_rounds = 3`)).feedbackRounds, 3);
+    assert.equal(parseProjectConfig('/r', md(`${withFeedback}\n[flow]\nfeedback_rounds = 0`)).feedbackRounds, 0);
+    assert.throws(() => parseProjectConfig('/r', md(`${base}\n[flow]\nfeedback_rounds = 2`)), /needs roles.feedback/);
+    assert.throws(() => parseProjectConfig('/r', md(`${withFeedback}\n[flow]\nfeedback_rounds = -1`)), /whole number/);
+    assert.throws(() => parseProjectConfig('/r', md(base.replace('plan = "opus"', 'plan = "opus"\nfeedback = "x"'))), /unknown agent/);
 });

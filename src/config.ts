@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { parse } from 'smol-toml';
 
 export type Harness = 'opencode' | 'claude';
-export type Role = 'implement' | 'review' | 'plan';
+export type Role = 'implement' | 'feedback' | 'review' | 'plan';
 export type SessionRole = Role | 'chat';
 
 export interface AgentConfig {
@@ -44,6 +44,9 @@ export interface Prompts {
     review: string;
     fix: string;
     fixNotes: string;
+    feedback: string;
+    feedbackAgain: string;
+    feedbackFix: string;
     continue: string;
     gateFailed: string;
     plan: string;
@@ -56,7 +59,9 @@ export interface ProjectConfig {
     root: string;
     logDir: string;
     gate: GateStep[];
-    roles: Record<Role | 'chat' | 'summary', string>;
+    roles: Record<Exclude<Role, 'feedback'> | 'chat' | 'summary', string> & { feedback?: string };
+    // checks by roles.feedback before the review; 0 skips them
+    feedbackRounds: number;
     agents: Map<string, AgentConfig>;
     prompts: Prompts;
     commands: ProjectCommand[];
@@ -75,6 +80,24 @@ const defaultPrompts: Prompts = {
     review: 'please review {id}',
     fix: 'please fix all issues, commit',
     fixNotes: 'please fix {notes}; then commit',
+    feedback:
+        'Check the work on {id}: the commits after {base} in this tree, made by another agent. Report ' +
+        'only: do not edit files or commit. Go through:\n' +
+        '- each requirement and validation step of {id} in PLAN.md (or its CHANGELOG.md entry if it ' +
+        'moved there): done or not, with evidence from the diff or a command you ran\n' +
+        "- comments in or next to the changed code that are out of date or break the project's rules\n" +
+        '- claims in the commit messages or CHANGELOG.md that nothing in the diff, tests or logs backs up\n' +
+        '- formatting of the touched files, and the tests covering them\n' +
+        '- bugs you can show with a concrete input or a failing test\n\n' +
+        'Give each finding a file:line and the change it needs. Skip style preferences and guesses. ' +
+        'End with a line `VERDICT: clean` when nothing needs fixing, otherwise `VERDICT: findings`.',
+    feedbackAgain:
+        'The implementer answered your findings: its reply is below and its new commits are in the ' +
+        'tree. Check the fixes and whether anything you raised is still open; drop findings it ' +
+        'rejected for a sound reason. Same rules, same VERDICT line.\n\n{reply}',
+    feedbackFix:
+        'Another agent checked your work on {id} and reported the findings below. Fix the ones that ' +
+        'hold in a new commit (do not amend); for each one you reject, say why in a line.\n\n{findings}',
     continue:
         'Your last turn stopped before it finished (an error, an interruption or a restart). Check where ' +
         'the work stands and carry on from there.',
@@ -225,7 +248,7 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
     }
 
     const r = table(t.roles, 'roles');
-    const roles = {} as Record<Role | 'chat' | 'summary', string>;
+    const roles = {} as ProjectConfig['roles'];
     for (const role of ['implement', 'review', 'plan'] as const) {
         roles[role] = str(r, role, 'roles');
         if (!agents.has(roles[role])) {
@@ -234,8 +257,11 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
     }
     roles.chat = r.chat === undefined ? roles.plan : str(r, 'chat', 'roles');
     roles.summary = r.summary === undefined ? roles.chat : str(r, 'summary', 'roles');
-    for (const role of ['chat', 'summary'] as const) {
-        if (!agents.has(roles[role])) {
+    if (r.feedback !== undefined) {
+        roles.feedback = str(r, 'feedback', 'roles');
+    }
+    for (const role of ['chat', 'summary', 'feedback'] as const) {
+        if (roles[role] !== undefined && !agents.has(roles[role])) {
             throw new Error(`roles.${role} names unknown agent "${roles[role]}"`);
         }
     }
@@ -246,6 +272,9 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         review: str(p, 'review', 'prompts', defaultPrompts.review),
         fix: str(p, 'fix', 'prompts', defaultPrompts.fix),
         fixNotes: str(p, 'fix_notes', 'prompts', defaultPrompts.fixNotes),
+        feedback: str(p, 'feedback', 'prompts', defaultPrompts.feedback),
+        feedbackAgain: str(p, 'feedback_again', 'prompts', defaultPrompts.feedbackAgain),
+        feedbackFix: str(p, 'feedback_fix', 'prompts', defaultPrompts.feedbackFix),
         continue: str(p, 'continue', 'prompts', defaultPrompts.continue),
         gateFailed: str(p, 'gate_failed', 'prompts', defaultPrompts.gateFailed),
         plan: str(p, 'plan', 'prompts', defaultPrompts.plan),
@@ -290,7 +319,20 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
     }
 
     const logDir = resolve(root, str(table(t.logs, 'logs'), 'dir', 'logs', 'wlog'));
-    return { root, logDir, gate, roles, agents, prompts, commands };
+    const flow = table(t.flow, 'flow');
+    let feedbackRounds = roles.feedback === undefined ? 0 : 1;
+    if (flow.feedback_rounds !== undefined) {
+        const n = flow.feedback_rounds;
+        if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) {
+            throw new Error('flow.feedback_rounds must be a whole number, 0 or more');
+        }
+        if (n > 0 && roles.feedback === undefined) {
+            throw new Error('flow.feedback_rounds needs roles.feedback');
+        }
+        feedbackRounds = n;
+    }
+
+    return { root, logDir, gate, roles, feedbackRounds, agents, prompts, commands };
 }
 
 export function loadProjectConfig(root: string): ProjectConfig {

@@ -23,11 +23,12 @@ import { describeError, type Messenger } from './telegram.ts';
 
 type Busy = Role | 'gate' | `/${string}` | null;
 
-const roles: readonly string[] = ['implement', 'review', 'plan'];
+const roles: readonly string[] = ['implement', 'feedback', 'review', 'plan'];
 
 const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /review [agent] [id] - review the current task (or a task done outside the conductor)
 /fix [notes] - reviewer applies fixes and commits
+/feedback [agent] - run a feedback check of the current task now (one more round)
 /continue [role] [notes] - resume a turn that stopped early (error, /stop, restart)
 /gate - run the gate on the current session's commits now, then continue as after a turn
 /todo [id] - list PLAN.md "Next" items (or show one in full)
@@ -79,6 +80,7 @@ export class Conductor {
         chat.command('next', (a) => this.nextTask(a));
         chat.command('review', (a) => this.review(a));
         chat.command('fix', (a) => this.fix(a));
+        chat.command('feedback', (a) => this.feedbackCommand(a));
         chat.command('continue', (a) => this.continueTurn(a));
         chat.command('gate', () => this.gateCommand());
         chat.command('plan', (a) => this.plan(a));
@@ -350,6 +352,8 @@ export class Conductor {
             this.state.sessions = this.keepChat();
             this.state.focus = 'implement';
             this.state.lastGate = undefined;
+            this.state.feedbackRound = undefined;
+            this.state.feedbackFixing = undefined;
             await this.createSession('implement', agentName, item.id);
         } finally {
             this.busy = null;
@@ -370,7 +374,8 @@ export class Conductor {
     }
 
     private vars(extra: Record<string, string> = {}): Record<string, string> {
-        return { id: this.state.task?.id ?? '', num: this.state.task?.number ?? '', ...extra };
+        const base = (this.state.sessions.implement?.startSha ?? '').slice(0, 7);
+        return { id: this.state.task?.id ?? '', num: this.state.task?.number ?? '', base, ...extra };
     }
 
     private async review(args: string) {
@@ -397,6 +402,8 @@ export class Conductor {
         this.state.task = found ?? { id: fullId, number: idNumber(id), text: '(done outside the conductor)' };
         this.state.sessions = this.keepChat();
         this.state.lastGate = undefined;
+        this.state.feedbackRound = undefined;
+        this.state.feedbackFixing = undefined;
         this.store.save();
     }
 
@@ -412,6 +419,77 @@ export class Conductor {
             }
         }
         return undefined;
+    }
+
+    private async afterImplementGate() {
+        const done = this.state.feedbackRound ?? 0;
+        if (this.project.roles.feedback && done < this.project.feedbackRounds) {
+            await this.runFeedback(this.project.roles.feedback);
+        } else {
+            await this.startReview(this.project.roles.review);
+        }
+    }
+
+    private async feedbackCommand(args: string) {
+        this.reload();
+        const { agent } = this.parseArgs(args);
+        const name = agent ?? this.project.roles.feedback;
+        if (!name) {
+            await this.chat.send('no feedback agent: set roles.feedback in CONDUCTOR.md, or /feedback <agent>');
+            return;
+        }
+        if (!this.state.task || !this.state.sessions.implement) {
+            await this.chat.send('no implementation to check; /next first');
+            return;
+        }
+        await this.runFeedback(name);
+    }
+
+    private async runFeedback(agentName: string) {
+        const task = this.state.task!;
+        const round = (this.state.feedbackRound ?? 0) + 1;
+        const first = !this.state.sessions.feedback || this.state.sessions.feedback.agent !== agentName;
+        this.claim('feedback');
+        let text: string;
+        try {
+            if (first) {
+                this.live.delete('feedback');
+                await this.createSession('feedback', agentName, `${task.id} feedback`);
+                text = fill(this.project.prompts.feedback, this.vars());
+            } else {
+                const reply = await this.session('implement').lastReply();
+                text = fill(this.project.prompts.feedbackAgain, this.vars({ reply }));
+            }
+            this.state.sessions.feedback!.checkedSha = await repo.head(this.project.root);
+            this.state.feedbackRound = round;
+            this.state.focus = 'feedback';
+            this.store.save();
+        } finally {
+            this.busy = null;
+        }
+        const of = Math.max(this.project.feedbackRounds, round);
+        await this.turn('feedback', text, `checking ${task.id} (feedback ${round}/${of})`);
+    }
+
+    private async afterFeedback(report: string) {
+        const task = this.state.task!;
+        const verdict = [...report.matchAll(/^\W*VERDICT:\W*(clean|findings)\b/gim)].pop()?.[1].toLowerCase();
+        if (verdict === 'clean') {
+            await this.chat.send(`feedback: ${task.id} is clean; on to the review`);
+            await this.startReview(this.project.roles.review);
+            return;
+        }
+        if (!verdict) {
+            await this.chat.send('feedback: no VERDICT line; taking the reply as findings');
+        }
+        this.state.feedbackFixing = true;
+        this.state.focus = 'implement';
+        this.store.save();
+        await this.turn(
+            'implement',
+            fill(this.project.prompts.feedbackFix, this.vars({ findings: report })),
+            `answering feedback ${this.state.feedbackRound ?? 1} on ${task.id}`,
+        );
     }
 
     private async startReview(agentName: string) {
@@ -616,7 +694,7 @@ export class Conductor {
             } else if (this.project.agents.has(word)) {
                 agentName = word;
             } else {
-                throw new Error(`/summary [implement|review|plan|chat] [agent]: unknown "${word}"`);
+                throw new Error(`/summary [implement|feedback|review|plan|chat] [agent]: unknown "${word}"`);
             }
         }
         target ??= this.busy && roles.includes(this.busy) ? (this.busy as Role) : this.state.focus;
@@ -724,19 +802,37 @@ export class Conductor {
 
     private async turn(role: Role, text: string, doing: string, gateAttempt = 0, quote = true) {
         this.claim(role);
+        let r: TurnResult;
         let gateFrom: string | undefined;
         try {
             const head = `${this.prefix(role)} ${doing}…`;
             await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
             this.markTurn(role, { since: Date.now(), doing });
-            const r = await this.session(role).send(text);
+            r = await this.session(role).send(text);
             gateFrom = await this.settle(role, r);
         } finally {
             this.markTurn(role, undefined);
             this.busy = null;
         }
+        await this.afterTurn(role, r, gateFrom, gateAttempt);
+    }
+
+    private async afterTurn(role: Role, r: TurnResult, gateFrom: string | undefined, gateAttempt: number) {
+        if (role === 'feedback') {
+            if (r.outcome === 'succeeded') {
+                await this.afterFeedback(r.text);
+            }
+            return;
+        }
         if (gateFrom !== undefined) {
             await this.afterCommits(role, gateFrom, gateAttempt);
+            return;
+        }
+        if (role === 'implement' && this.state.feedbackFixing && r.outcome === 'succeeded') {
+            this.state.feedbackFixing = undefined;
+            this.store.save();
+            await this.chat.send('the implementer changed nothing for the feedback; on to the review');
+            await this.startReview(this.project.roles.review);
         }
     }
 
@@ -801,6 +897,9 @@ export class Conductor {
         if (role === 'plan') {
             await this.checkPlanOnly();
         }
+        if (role === 'feedback' && committed) {
+            await this.chat.send(`warning: the feedback check committed (it should only report):\n${await repo.commitMessages(root, from)}`);
+        }
         return committed ? from : undefined;
     }
 
@@ -835,22 +934,21 @@ export class Conductor {
             return;
         }
         this.claim(role);
+        let r: TurnResult;
         let gateFrom: string | undefined;
         try {
-            const text = await this.session(role).lastReply();
-            gateFrom = await this.settle(role, { outcome: ev.outcome, error: ev.error, text });
+            r = { outcome: ev.outcome, error: ev.error, text: await this.session(role).lastReply() };
+            gateFrom = await this.settle(role, r);
         } finally {
             this.busy = null;
         }
-        if (gateFrom !== undefined) {
-            await this.afterCommits(role, gateFrom, 0);
-        }
+        await this.afterTurn(role, r, gateFrom, 0);
     }
 
     private async gateCommand() {
         const role = this.state.focus;
         const ref = role ? this.state.sessions[role] : undefined;
-        if (!role || !ref || role === 'plan') {
+        if (!role || !ref || role === 'plan' || role === 'feedback') {
             await this.chat.send('no implementation or review session to gate');
             return;
         }
@@ -918,7 +1016,9 @@ export class Conductor {
         );
         await this.chat.sendFile(`${task?.id ?? 'task'}-${role}.diff`, await repo.diff(root, from));
         if (role === 'implement') {
-            await this.startReview(this.project.roles.review);
+            this.state.feedbackFixing = undefined;
+            this.store.save();
+            await this.afterImplementGate();
         } else if (role === 'review') {
             await this.chat.send(`${task?.id ?? 'task'} done; /next when ready`);
         }
@@ -935,6 +1035,9 @@ export class Conductor {
         const id = this.state.task?.id ?? ref.title;
         if (role === 'implement') {
             return `${id}-${tag}.md`;
+        }
+        if (role === 'feedback') {
+            return `${id}-feedback-${tag}.md`;
         }
         return `${id}-review${planTouched ? '-plan' : ''}-${tag}.md`;
     }

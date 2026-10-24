@@ -27,6 +27,9 @@ export interface State {
     sessions: Partial<Record<SessionRole, SessionRef>>;
     lastGate?: GateRecord;
     planTopic?: string;
+    // feedback checks run for the current task, and whether the implementer is answering one
+    feedbackRound?: number;
+    feedbackFixing?: boolean;
 }
 
 export class Store {

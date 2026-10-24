@@ -88,8 +88,17 @@ The same loop as today, one command per step, with the bridge doing the bookkeep
      failed, fix it: ..."), then runs the gate again. A second failure is reported and the
      task waits for me.
    - Gate passes: the bridge posts the commit title and body, the diff stat, the gate outcome
-     and the agent's final message, with the full diff attached as a file, and goes straight
-     to step 3.
+     and the agent's final message, with the full diff attached as a file, and goes on to the
+     feedback check (when configured) or straight to step 3.
+   - Feedback (`roles.feedback`, up to `[flow] feedback_rounds` times, default 1 when the role is
+     set, 0 to skip): a cheaper agent checks the commits against a checklist (plan steps and
+     their evidence, stale or rule-breaking comments, unsupported CHANGELOG claims, formatting
+     and tests, provable bugs) and only reports, ending with `VERDICT: clean` or `VERDICT:
+     findings`. Findings go to the implementing session, which fixes what holds, rejects the
+     rest with a reason and commits; the gate runs and the next round checks the answer in the
+     same feedback session. A clean verdict, an answer without commits or the last round leads
+     to step 3. Mechanical misses get fixed before the expensive review, and the code stays the
+     implementer's: the checker never edits. `/feedback [agent]` runs one more round by hand.
 3. Auto-review: the bridge starts a review session (`roles.review`) with `please review <id>`
    (the same context `AGENTS.md` gives an interactive session) and posts the findings.
    Reviewing does not touch the tree, so it needs no confirmation. `/review [agent]` starts or
@@ -130,7 +139,8 @@ idle, so `wlog/` is always current, even for a task that is abandoned halfway. T
 
     wlog/<task-id>[-<step>]-<tag>.md
 
-- `<step>` is empty for the implementation session, `review` for review and fixes, and
+- `<step>` is empty for the implementation session, `feedback` for the feedback checks,
+  `review` for review and fixes, and
   `review-plan` when the review session also edited `PLAN.md` (a `/plan` discussion inside
   the review, which is what `-review-plan-` means in today's names). A `/plan` session
   writes `wlog/<task-id>-plan-<tag>.md`, or `wlog/plan-<date>-<topic>-<tag>.md` when there is no

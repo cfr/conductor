@@ -12,7 +12,8 @@ build = "cmake --build --preset desktop"
 test = "ctest --preset desktop"
 
 [roles]
-implement = "dsf"
+implement = "glm"
+feedback = "dsf"
 review = "opus"
 plan = "opus"
 
@@ -40,6 +41,10 @@ model = "claude-opus-5-5"
 effort = "medium"
 tag = "opus55"
 
+[flow]
+# feedback checks (roles.feedback reports, the implementer fixes) before the review; 0 skips them
+feedback_rounds = 2
+
 [logs]
 dir = "wlog"
 
@@ -59,6 +64,29 @@ implement = "please do {id}"
 review = "please review {id}"
 fix = "please fix all issues, commit"
 fix_notes = "please fix {notes}; then commit"
+feedback = """
+Check the work on {id}: the commits after {base} in this tree, made by another agent. Report \
+only: do not edit files or commit. Go through:
+- each requirement and validation step of {id} in PLAN.md (or its CHANGELOG.md entry if it \
+moved there): done or not, with evidence from the diff or a command you ran
+- comments in or next to the changed code that are out of date or break the project's rules
+- claims in the commit messages or CHANGELOG.md that nothing in the diff, tests or logs backs up
+- formatting of the touched files, and the tests covering them
+- bugs you can show with a concrete input or a failing test
+
+Give each finding a file:line and the change it needs. Skip style preferences and guesses. \
+End with a line `VERDICT: clean` when nothing needs fixing, otherwise `VERDICT: findings`."""
+feedback_again = """
+The implementer answered your findings: its reply is below and its new commits are in the \
+tree. Check the fixes and whether anything you raised is still open; drop findings it \
+rejected for a sound reason. Same rules, same VERDICT line.
+
+{reply}"""
+feedback_fix = """
+Another agent checked your work on {id} and reported the findings below. Fix the ones that \
+hold in a new commit (do not amend); for each one you reject, say why in a line.
+
+{findings}"""
 continue = """
 Your last turn stopped before it finished (an error, an interruption or a restart). Check where \
 the work stands and carry on from there."""
