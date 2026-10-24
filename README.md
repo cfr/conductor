@@ -33,6 +33,8 @@ Then `/help` in the chat. The usual loop:
 - after a turn that committed, the gate runs; a failure goes back to the agent once
 - when the gate passes, the review starts by itself and its findings are posted
 - `/fix [notes]`: the reviewer fixes and commits, the gate runs again
+- `/continue [role] [notes]` resumes a turn that stopped early (a provider error, `/stop`, a
+  restart); a failed or interrupted turn says so with this hint
 - `/review [agent] <id>` reviews work done outside the conductor, e.g. a task GLM finished in the
   TUI
 - plain text goes to the current session; reply to an agent's message to reach that session
@@ -41,6 +43,11 @@ Then `/help` in the chat. The usual loop:
 
 Every turn the conductor starts posts its prompt under the "implementing…", "fixing…" line as a
 collapsed quote (cut at one message), so you can see what the agent was told.
+
+If the conductor stops during a turn (a crash, Ctrl-C), the next start reports how that turn went:
+one still running in opencode is followed as usual; one that ended while the conductor was down gets
+its reply, log, gate and review as if nothing happened; a Claude Code turn dies with the conductor
+and is reported as interrupted, ready for `/continue`.
 
 When opencode resumes a session by itself (a background job the agent started finished), the
 conductor posts that and handles the end of that turn like any other: reply, log, gate, review.

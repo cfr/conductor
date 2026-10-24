@@ -4,7 +4,7 @@ import type { AgentConfig } from '../config.ts';
 import { findTranscript, readClaudeTranscript } from '../logs/claude.ts';
 import { bashPatterns } from './bash-rules.ts';
 import type { Transcript } from '../logs/markdown.ts';
-import type { Adapter, AgentSession, SessionOptions, TurnResult } from './types.ts';
+import type { Adapter, AgentSession, SessionOptions, TurnResult, TurnState } from './types.ts';
 
 interface AskInput {
     questions?: {
@@ -138,6 +138,15 @@ class ClaudeSession implements AgentSession {
 
     async interrupt(): Promise<void> {
         this.abort?.abort();
+    }
+
+    // The SDK's claude process dies with the conductor, so a lost turn never runs on.
+    async turnState(): Promise<TurnState> {
+        const last = readClaudeTranscript(this.id)?.messages.at(-1);
+        if (last?.role === 'assistant' && last.parts.at(-1)?.kind === 'text') {
+            return { running: false, outcome: 'succeeded' };
+        }
+        return { running: false, outcome: 'interrupted', error: 'the conductor stopped during the turn' };
     }
 
     async transcript(): Promise<Transcript | undefined> {

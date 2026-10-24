@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import type { AgentConfig } from '../config.ts';
 import { fromOpencode, type OcExport } from '../logs/opencode.ts';
 import type { Transcript } from '../logs/markdown.ts';
-import type { Adapter, AgentSession, Asker, SessionOptions, TurnResult, UnsolicitedEvent } from './types.ts';
+import type { Adapter, AgentSession, Asker, SessionOptions, TurnResult, TurnState, UnsolicitedEvent } from './types.ts';
 
 interface OcEvent {
     type: string;
@@ -298,6 +298,24 @@ class OpencodeSession implements AgentSession {
 
     async interrupt(): Promise<void> {
         await this.oc.api('POST', `/api/session/${this.id}/interrupt`);
+    }
+
+    async turnState(): Promise<TurnState> {
+        const s = await this.oc.api<{ data: { time: { updated: number; idle?: number }; outcome?: string } }>(
+            'GET',
+            `/api/session/${this.id}`,
+        );
+        // starting a turn bumps `updated`; `idle` is set when one ends
+        const { idle, updated } = s.data.time;
+        if (!idle || idle < updated) {
+            return { running: true };
+        }
+        const last = await this.oc.api<{ data: { type: string; error?: { message?: string } }[] }>(
+            'GET',
+            `/api/session/${this.id}/message?order=desc&limit=1`,
+        );
+        const outcome = (s.data.outcome ?? 'failed') as TurnResult['outcome'];
+        return { running: false, outcome, error: last.data[0]?.error?.message };
     }
 
     async transcript(): Promise<Transcript | undefined> {

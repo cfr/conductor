@@ -30,7 +30,7 @@ export interface ProjectCommand {
 }
 
 export const builtinCommands = [
-    'help', 'start', 'next', 'review', 'fix', 'gate', 'todo', 'plan', 'chat', 'summary', 'agents', 'status',
+    'help', 'start', 'next', 'review', 'fix', 'continue', 'gate', 'todo', 'plan', 'chat', 'summary', 'agents', 'status',
     'stop', 'log',
 ];
 
@@ -44,6 +44,7 @@ export interface Prompts {
     review: string;
     fix: string;
     fixNotes: string;
+    continue: string;
     gateFailed: string;
     plan: string;
     planDone: string;
@@ -74,6 +75,9 @@ const defaultPrompts: Prompts = {
     review: 'please review {id}',
     fix: 'please fix all issues, commit',
     fixNotes: 'please fix {notes}; then commit',
+    continue:
+        'Your last turn stopped before it finished (an error, an interruption or a restart). Check where ' +
+        'the work stands and carry on from there.',
     gateFailed:
         'The verification gate failed after your last turn (step `{step}`). Fix it and commit. ' +
         'Output tail:\n\n```\n{output}\n```',
@@ -242,6 +246,7 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
         review: str(p, 'review', 'prompts', defaultPrompts.review),
         fix: str(p, 'fix', 'prompts', defaultPrompts.fix),
         fixNotes: str(p, 'fix_notes', 'prompts', defaultPrompts.fixNotes),
+        continue: str(p, 'continue', 'prompts', defaultPrompts.continue),
         gateFailed: str(p, 'gate_failed', 'prompts', defaultPrompts.gateFailed),
         plan: str(p, 'plan', 'prompts', defaultPrompts.plan),
         planDone: str(p, 'plan_done', 'prompts', defaultPrompts.planDone),

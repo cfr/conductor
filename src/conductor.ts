@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { dirname, join } from 'node:path';
 import { ClaudeAdapter } from './agents/claude.ts';
 import { OpencodeAdapter } from './agents/opencode.ts';
-import type { Adapter, AgentSession, Asker, Question, TurnResult, UnsolicitedEvent } from './agents/types.ts';
+import type { Adapter, AgentSession, Asker, Question, TurnResult, TurnState, UnsolicitedEvent } from './agents/types.ts';
 import {
     fill,
     loadProjectConfig,
@@ -28,6 +28,7 @@ const roles: readonly string[] = ['implement', 'review', 'plan'];
 const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /review [agent] [id] - review the current task (or a task done outside the conductor)
 /fix [notes] - reviewer applies fixes and commits
+/continue [role] [notes] - resume a turn that stopped early (error, /stop, restart)
 /gate - run the gate on the current session's commits now, then continue as after a turn
 /todo [id] - list PLAN.md "Next" items (or show one in full)
 /plan [agent] [topic] - planning discussion (edits PLAN.md only)
@@ -78,6 +79,7 @@ export class Conductor {
         chat.command('next', (a) => this.nextTask(a));
         chat.command('review', (a) => this.review(a));
         chat.command('fix', (a) => this.fix(a));
+        chat.command('continue', (a) => this.continueTurn(a));
         chat.command('gate', () => this.gateCommand());
         chat.command('plan', (a) => this.plan(a));
         chat.command('todo', (a) => this.todo(a));
@@ -426,6 +428,19 @@ export class Conductor {
         await this.turn('review', fill(this.project.prompts.review, this.vars()), `reviewing ${task.id}`);
     }
 
+    private async continueTurn(args: string) {
+        const words = args.trim().split(/\s+/).filter(Boolean);
+        const role = words[0] && roles.includes(words[0]) ? (words.shift() as Role) : this.state.focus;
+        if (!role || !this.state.sessions[role]) {
+            await this.chat.send(role ? `no ${role} session` : 'no session to continue');
+            return;
+        }
+        const notes = words.join(' ');
+        const text = this.project.prompts.continue + (notes ? `\n\n${notes}` : '');
+        this.state.focus = role;
+        await this.turn(role, text, 'continuing');
+    }
+
     private async fix(notes: string) {
         if (!this.state.sessions.review) {
             await this.chat.send('no review session; /review first');
@@ -709,13 +724,15 @@ export class Conductor {
 
     private async turn(role: Role, text: string, doing: string, gateAttempt = 0, quote = true) {
         this.claim(role);
-        const head = `${this.prefix(role)} ${doing}…`;
-        await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
         let gateFrom: string | undefined;
         try {
+            const head = `${this.prefix(role)} ${doing}…`;
+            await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
+            this.markTurn(role, { since: Date.now(), doing });
             const r = await this.session(role).send(text);
             gateFrom = await this.settle(role, r);
         } finally {
+            this.markTurn(role, undefined);
             this.busy = null;
         }
         if (gateFrom !== undefined) {
@@ -731,6 +748,39 @@ export class Conductor {
         }
     }
 
+    private markTurn(role: Role, turn: SessionRef['turn']) {
+        const ref = this.state.sessions[role];
+        if (ref && (turn || ref.turn)) {
+            ref.turn = turn;
+            this.store.save();
+        }
+    }
+
+    private async recoverTurns() {
+        for (const role of roles as Role[]) {
+            const ref = this.state.sessions[role];
+            if (!ref?.turn) {
+                continue;
+            }
+            const { since, doing } = ref.turn;
+            const p = this.prefix(role);
+            const what = `its turn (${doing}, from ${new Date(since).toTimeString().slice(0, 5)})`;
+            let st: TurnState;
+            try {
+                st = await this.session(role).turnState(since);
+            } catch (e) {
+                await this.chat.send(`${p} could not check ${what}: ${describeError(e)}`, role);
+                continue;
+            }
+            if (st.running) {
+                await this.chat.send(`${p} ${what} is still running; its end is handled as usual`, role);
+                continue;
+            }
+            await this.chat.send(`${p} ${what} ended while the conductor was down`, role);
+            await this.unsolicited(ref.id, { phase: 'ended', outcome: st.outcome, error: st.error });
+        }
+    }
+
     // Returns the commit before the session's new commits when it committed since it was last checked.
     private async settle(role: Role, r: TurnResult): Promise<string | undefined> {
         await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
@@ -739,7 +789,7 @@ export class Conductor {
             await this.chat.sendMarkdown(p, r.text, role);
         }
         if (r.outcome !== 'succeeded') {
-            await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}`, role);
+            await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}; /continue to resume it`, role);
             return undefined;
         }
         const root = this.project.root;
@@ -774,6 +824,7 @@ export class Conductor {
             await this.chat.send(`${p} resumed on its own (e.g. a background job finished)…`, role);
             return;
         }
+        this.markTurn(role, undefined);
         if (this.busy) {
             await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
             const text = await this.session(role).lastReply();
@@ -993,5 +1044,6 @@ export class Conductor {
         }
         commands.set('help', 'commands');
         await this.chat.takeOver(text, [...commands].map(([command, description]) => ({ command, description })));
+        await this.recoverTurns();
     }
 }

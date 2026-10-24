@@ -62,8 +62,8 @@ tag = "opus55"
 - `variant` (optional, `opencode` only) picks the model variant opencode offers (`default`, or
   e.g. `low`/`high`/`max` thinking); checked against opencode's model list when a session starts.
 - `[prompts]` overrides the text sent at each step (`implement`, `review`, `fix`, `fix_notes`,
-  `gate_failed`, `plan`, `plan_done`, `chat`, `summary`; `CONDUCTOR.example.md` lists the
-  defaults); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}`, `{topic}`, `{message}`, `{log}`,
+  `continue`, `gate_failed`, `plan`, `plan_done`, `chat`, `summary`; `CONDUCTOR.example.md` lists
+  the defaults); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}`, `{topic}`, `{message}`, `{log}`,
   `{role}`, `{task}` and `{state}` are filled in. `[logs] dir` sets the log directory (default
   `wlog`).
 - `tag` names the model everywhere it shows: the suffix in `wlog/` file names (so existing

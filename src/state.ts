@@ -10,6 +10,8 @@ export interface SessionRef {
     startSha: string;
     checkedSha?: string;
     logFile?: string;
+    // set while a turn runs, so a restart can tell how it ended
+    turn?: { since: number; doing: string };
 }
 
 export interface GateRecord {

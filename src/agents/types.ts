@@ -7,6 +7,10 @@ export interface TurnResult {
     error?: string;
 }
 
+export type TurnState =
+    | { running: true }
+    | { running: false; outcome: TurnResult['outcome']; error?: string };
+
 export interface Choice {
     label: string;
     description?: string;
@@ -40,6 +44,8 @@ export interface AgentSession {
     lastReply(): Promise<string>;
     interrupt(): Promise<void>;
     transcript(): Promise<Transcript | undefined>;
+    // For a turn begun at `since` (ms) whose end the conductor missed, e.g. across a restart.
+    turnState(since: number): Promise<TurnState>;
 }
 
 export type UnsolicitedEvent =

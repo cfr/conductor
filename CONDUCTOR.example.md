@@ -59,6 +59,9 @@ implement = "please do {id}"
 review = "please review {id}"
 fix = "please fix all issues, commit"
 fix_notes = "please fix {notes}; then commit"
+continue = """
+Your last turn stopped before it finished (an error, an interruption or a restart). Check where \
+the work stands and carry on from there."""
 gate_failed = """
 The verification gate failed after your last turn (step `{step}`). Fix it and commit. \
 Output tail:
