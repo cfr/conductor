@@ -12,15 +12,15 @@ markdown after each turn. See `DESIGN.md` for the flow and its reasons.
 Node 24 or newer (TypeScript runs directly through Node's type stripping, no build step).
 
     npm install
-    cp conductor.example.toml conductor.toml   # set project and the Telegram env file
+    cp config.example.toml config.toml   # project path, bot token, your Telegram user id
 
-The project needs a `CONDUCTOR.md` at its root with one `toml` block: gate commands, agents,
-roles and optional prompts. `CONDUCTOR.example.md` is the one for bane.
+`config.toml` is gitignored: it holds the bot token. Messages from anyone but
+`telegram.allowed_user_id` are ignored. Only one process may poll a bot token, so stop
+opencode-telegram-bot while the conductor runs on the same token (the conductor exits with a
+message on `409 Conflict`).
 
-Telegram credentials come from the env file named in `conductor.toml` (`TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_ALLOWED_USER_ID`); messages from any other user are ignored. Only one process may poll a
-bot token, so stop opencode-telegram-bot while the conductor runs on the same token (the
-conductor exits with a message on `409 Conflict`).
+The project needs a `CONDUCTOR.toml` at its root: gate commands, agents, roles, flow, project
+commands and optional prompts. `CONDUCTOR.example.toml` is the one for bane.
 
 ## Run
 
@@ -76,7 +76,7 @@ commit, warns about files other than `PLAN.md`, offers to undo it and, when kept
 item. A `/plan done` with nothing left to write lists the session's earlier planning commits.
 `/status`, `/stop`, `/agents` and `/log` do what they say.
 
-Project commands come from `[commands.<name>]` in `CONDUCTOR.md` (`cmd`, `description`,
+Project commands come from `[commands.<name>]` in `CONDUCTOR.toml` (`cmd`, `description`,
 `confirm` for a yes/no button first, `background` for long-running ones, `ready` a regular
 expression: a background command reports its output from the first matching line, e.g. its URL,
 instead of a snapshot five seconds after the start). Text after the command

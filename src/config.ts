@@ -148,35 +148,14 @@ function str(t: Table, key: string, what: string, fallback?: string): string {
     return v;
 }
 
-export function parseEnvFile(text: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const raw of text.split('\n')) {
-        const line = raw.trim();
-        const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-        if (!m || line.startsWith('#')) {
-            continue;
-        }
-        let value = m[2];
-        if (/^(['"]).*\1$/.test(value)) {
-            value = value.slice(1, -1);
-        } else {
-            value = value.replace(/\s+#.*$/, '');
-        }
-        out[m[1]] = value;
-    }
-    return out;
-}
-
 export function loadLocalConfig(file: string): LocalConfig {
     const t = parse(readFileSync(file, 'utf8')) as Table;
     const base = dirname(file);
     const tg = table(t.telegram, 'telegram');
-    const envFile = expandHome(str(tg, 'env', 'telegram'));
-    const env = parseEnvFile(readFileSync(envFile, 'utf8'));
-    const token = env.TELEGRAM_BOT_TOKEN;
-    const user = Number(env.TELEGRAM_ALLOWED_USER_ID);
-    if (!token || !Number.isSafeInteger(user) || user <= 0) {
-        throw new Error(`${envFile} must define TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_ID`);
+    const token = str(tg, 'token', 'telegram');
+    const user = tg.allowed_user_id;
+    if (typeof user !== 'number' || !Number.isSafeInteger(user) || user <= 0) {
+        throw new Error(`${file}: telegram.allowed_user_id must be your numeric Telegram user id`);
     }
     const oc = table(t.opencode, 'opencode');
     return {
@@ -188,16 +167,8 @@ export function loadLocalConfig(file: string): LocalConfig {
     };
 }
 
-export function extractTomlBlock(markdown: string): string {
-    const blocks = [...markdown.matchAll(/^(`{3,})toml[^\n]*\n([\s\S]*?)^\1\s*$/gm)];
-    if (blocks.length !== 1) {
-        throw new Error(`CONDUCTOR.md must contain exactly one \`\`\`toml block, found ${blocks.length}`);
-    }
-    return blocks[0][2];
-}
-
-export function parseProjectConfig(root: string, markdown: string): ProjectConfig {
-    const t = parse(extractTomlBlock(markdown)) as Table;
+export function parseProjectConfig(root: string, toml: string): ProjectConfig {
+    const t = parse(toml) as Table;
 
     const gate = Object.entries(table(t.gate, 'gate')).map(([name, cmd]) => {
         if (typeof cmd !== 'string' || cmd === '') {
@@ -336,7 +307,7 @@ export function parseProjectConfig(root: string, markdown: string): ProjectConfi
 }
 
 export function loadProjectConfig(root: string): ProjectConfig {
-    return parseProjectConfig(root, readFileSync(resolve(root, 'CONDUCTOR.md'), 'utf8'));
+    return parseProjectConfig(root, readFileSync(resolve(root, 'CONDUCTOR.toml'), 'utf8'));
 }
 
 export function fill(template: string, vars: Record<string, string>): string {

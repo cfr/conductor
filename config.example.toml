@@ -1,0 +1,17 @@
+# Copy to config.toml (gitignored: it holds the bot token). Machine-specific settings only; the
+# project's agents, roles, gate and prompts live in the project's CONDUCTOR.toml.
+
+project = "~/Code/bane"
+
+# Defaults to state/state.json next to this file.
+# state = "state/state.json"
+
+[telegram]
+# From @BotFather; only one process may poll a token at a time.
+token = "123456789:replace-me"
+# Your numeric user id; messages from anyone else are ignored.
+allowed_user_id = 123456789
+
+[opencode]
+# The shared background service (`opencode service start`).
+url = "http://127.0.0.1:49374"

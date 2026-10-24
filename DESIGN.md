@@ -22,9 +22,9 @@ starts.
 
 ## Agents
 
-Each project carries its own config in `CONDUCTOR.md` at the repo root, next to `AGENTS.md`:
-prose for humans plus one fenced `toml` block the bridge parses. Commands pick an agent by name,
-or fall back to the role default.
+Each project carries its own config in `CONDUCTOR.toml` at the repo root, next to `AGENTS.md`;
+notes for humans are TOML comments. Commands pick an agent by name, or fall back to the role
+default.
 
 ```toml
 [gate]
@@ -62,7 +62,7 @@ tag = "opus55"
 - `variant` (optional, `opencode` only) picks the model variant opencode offers (`default`, or
   e.g. `low`/`high`/`max` thinking); checked against opencode's model list when a session starts.
 - `[prompts]` overrides the text sent at each step (`implement`, `review`, `fix`, `fix_notes`,
-  `continue`, `gate_failed`, `plan`, `plan_done`, `chat`, `summary`; `CONDUCTOR.example.md` lists
+  `continue`, `gate_failed`, `plan`, `plan_done`, `chat`, `summary`; `CONDUCTOR.example.toml` lists
   the defaults); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}`, `{topic}`, `{message}`, `{log}`,
   `{role}`, `{task}` and `{state}` are filled in. `[logs] dir` sets the log directory (default
   `wlog`).
@@ -70,8 +70,8 @@ tag = "opus55"
   names like `glm53` and `opus55` carry on) and the prefix of chat messages (`[glm53 0038]`).
 - `[gate]` is the verification the bridge runs after each committing step, in order; a
   non-zero exit fails it.
-- Machine-specific settings stay out of the repo, in the bridge's own `../conductor` config:
-  the Telegram env file path (`[telegram] env = ...`) and the project path the bridge works on.
+- Machine-specific settings stay out of the repo, in the bridge's own gitignored
+  `../conductor/config.toml`: the project path, the bot token and the allowed Telegram user id.
 - The bridge checks the config at start: unknown harness, an `opencode` model missing from
   `opencode models`, duplicate tags or a role naming an unknown agent are errors.
 
@@ -83,7 +83,7 @@ The same loop as today, one command per step, with the bridge doing the bookkeep
    id), shows the id, the item text and the agent, and on confirmation starts a session with
    that agent (default `roles.implement`) titled with the id and the prompt `please do <id>`.
 2. The agent implements and commits. When the session goes idle the bridge runs the
-   verification gate itself (`[gate]` in `CONDUCTOR.md`; here desktop build + `ctest`).
+   verification gate itself (`[gate]` in `CONDUCTOR.toml`; here desktop build + `ctest`).
    - Gate fails: the bridge sends the failure output back to the same session once ("the gate
      failed, fix it: ..."), then runs the gate again. A second failure is reported and the
      task waits for me.
@@ -219,13 +219,11 @@ reset --keep`, only while HEAD is still that commit).
 - A small, deterministic bridge process (not an LLM session): Telegram long-polling, the agents
   config, a state file (current task, step, session ids, agent per session), and one adapter per
   harness. It relays and runs commands; it never paraphrases agent output.
-- Telegram credentials are not copied: the bridge reads `TELEGRAM_BOT_TOKEN` and
-  `TELEGRAM_ALLOWED_USER_ID` from the existing opencode-telegram-bot env file
-  (`~/.config/opencode-telegram-bot/.env`, path set in the bridge's own config as `[telegram] env = ...`).
-  Telegram allows one `getUpdates` poller per token (a second gets `409 Conflict`), so the
-  bridge and that bot cannot run at the same time on one token. For now they share it: stop the
-  old bot while the bridge runs. If both are needed at once later, register a second bot and
-  point the bridge at its own env file with the same allowed user id.
+- Telegram credentials (`[telegram] token`, `allowed_user_id`) live in the bridge's
+  `config.toml`. Telegram allows one `getUpdates` poller per token (a second gets `409
+  Conflict`), so the bridge and opencode-telegram-bot cannot run at the same time on one token.
+  For now they share it: stop the old bot while the bridge runs. If both are needed at once
+  later, register a second bot and give the bridge its token with the same allowed user id.
 - `opencode` adapter (v2 HTTP API): turn end is `session.execution.{succeeded,failed,
   interrupted}` on `/api/event`, with a `GET /api/session/{id}` poll as fallback; questions are
   `permission.asked` and `form.created`. It talks to the shared background service the way
@@ -241,11 +239,11 @@ reset --keep`, only while HEAD is still that commit).
 
 ## Rules the bridge enforces
 
-- Only `TELEGRAM_ALLOWED_USER_ID` is accepted; everything else is ignored.
+- Only `telegram.allowed_user_id` is accepted; everything else is ignored.
 - One agent writes to the tree at a time (the "no edits during parallel agent" rule as a lock);
   a step that would overlap is refused with the reason. Auto-review starts only after the
   implementation session is idle and its gate run is done.
-- Agents never push or deploy from the bridge. Project commands (`[commands]` in `CONDUCTOR.md`,
+- Agents never push or deploy from the bridge. Project commands (`[commands]` in `CONDUCTOR.toml`,
   e.g. `/deploy`, `/serve`) run only when I send them, with a confirmation button where
   `confirm` is set, and a one-shot command never overlaps an agent turn or the gate.
 - The bridge's own gate run is the result it reports, not the agent's claim.

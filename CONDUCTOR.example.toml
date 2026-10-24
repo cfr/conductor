@@ -1,12 +1,9 @@
-# Conductor
+# Conductor configuration for this project (the conductor lives in ../conductor): which agents
+# implement, check, review and plan, the verification gate it runs after every committing turn,
+# the prompts it sends, and project commands (/deploy, /serve) that only run when sent from the
+# chat. The conductor re-reads it when a command starts (/next, /review, /plan...), so edits apply
+# without a restart.
 
-Configuration for the conductor bridge (`../conductor`): which agents implement, review and plan,
-the verification gate it runs after every committing turn, the prompts it sends, and project
-commands (`/deploy`, `/serve`) that only run when sent from the chat. The bridge parses the one
-`toml` block below (fenced with four backticks so prompts may contain code fences); everything else
-here is for people.
-
-````toml
 [gate]
 build = "cmake --build --preset desktop"
 test = "ctest --preset desktop"
@@ -114,4 +111,3 @@ Read {log}: the log of the {role} session for {task}, which is {state}. It can b
 so start from the end and read back only as far as you need. Then tell me in a few short \
 bullets: the goal, what is done, what it is doing right now, and any problems or open \
 questions. Change nothing."""
-````

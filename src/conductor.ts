@@ -116,7 +116,7 @@ export class Conductor {
         this.reload();
         const c = this.project.commands.find((x) => x.name === name);
         if (!c) {
-            await this.chat.send(`/${name} is no longer in CONDUCTOR.md`);
+            await this.chat.send(`/${name} is no longer in CONDUCTOR.toml`);
             return;
         }
         if (c.background) {
@@ -435,7 +435,7 @@ export class Conductor {
         const { agent } = this.parseArgs(args);
         const name = agent ?? this.project.roles.feedback;
         if (!name) {
-            await this.chat.send('no feedback agent: set roles.feedback in CONDUCTOR.md, or /feedback <agent>');
+            await this.chat.send('no feedback agent: set roles.feedback in CONDUCTOR.toml, or /feedback <agent>');
             return;
         }
         if (!this.state.task || !this.state.sessions.implement) {

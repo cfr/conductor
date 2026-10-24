@@ -6,7 +6,7 @@ import { Store } from './state.ts';
 import { Chat, describeError } from './telegram.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const configFile = resolve(process.env.CONDUCTOR_CONFIG ?? resolve(here, '..', 'conductor.toml'));
+const configFile = resolve(process.env.CONDUCTOR_CONFIG ?? resolve(here, '..', 'config.toml'));
 
 const local = loadLocalConfig(configFile);
 const store = new Store(local.stateFile);

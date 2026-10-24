@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { extractTomlBlock, fill, parseEnvFile, parseProjectConfig } from '../src/config.ts';
-
-const md = (toml: string) => `# Conductor\n\nprose\n\n\`\`\`toml\n${toml}\n\`\`\`\n`;
+import { fill, parseProjectConfig } from '../src/config.ts';
 
 const base = `
 [gate]
@@ -27,7 +25,7 @@ tag = "opus55"
 `;
 
 test('parses agents, roles, ordered gate and default prompts', () => {
-    const c = parseProjectConfig('/repo', md(base));
+    const c = parseProjectConfig('/repo', base);
     assert.deepEqual(c.gate.map((g) => g.name), ['build', 'test']);
     assert.equal(c.agents.get('glm')?.tag, 'glm53');
     assert.equal(c.roles.review, 'opus');
@@ -37,35 +35,23 @@ test('parses agents, roles, ordered gate and default prompts', () => {
 });
 
 test('rejects duplicate tags, unknown roles and bad opencode models', () => {
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "glm53"'))), /duplicate/);
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('review = "opus"', 'review = "x"'))), /unknown agent/);
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('zai-coding-plan/glm-5.3', 'glm-5.3'))), /provider\/model/);
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('harness = "claude"', 'harness = "x"'))), /harness/);
+    assert.throws(() => parseProjectConfig('/r', base.replace('tag = "opus55"', 'tag = "glm53"')), /duplicate/);
+    assert.throws(() => parseProjectConfig('/r', base.replace('review = "opus"', 'review = "x"')), /unknown agent/);
+    assert.throws(() => parseProjectConfig('/r', base.replace('zai-coding-plan/glm-5.3', 'glm-5.3')), /provider\/model/);
+    assert.throws(() => parseProjectConfig('/r', base.replace('harness = "claude"', 'harness = "x"')), /harness/);
 });
 
 test('effort is claude-only, variant opencode-only', () => {
     const withVariant = base.replace('tag = "glm53"', 'tag = "glm53"\nvariant = "high"');
-    assert.equal(parseProjectConfig('/r', md(withVariant)).agents.get('glm')?.variant, 'high');
+    assert.equal(parseProjectConfig('/r', withVariant).agents.get('glm')?.variant, 'high');
     const withEffort = base.replace('tag = "opus55"', 'tag = "opus55"\neffort = "medium"');
-    assert.equal(parseProjectConfig('/r', md(withEffort)).agents.get('opus')?.effort, 'medium');
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\nvariant = "high"'))), /variant/);
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "glm53"', 'tag = "glm53"\neffort = "high"'))), /effort/);
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\neffort = "huge"'))), /effort/);
+    assert.equal(parseProjectConfig('/r', withEffort).agents.get('opus')?.effort, 'medium');
+    assert.throws(() => parseProjectConfig('/r', base.replace('tag = "opus55"', 'tag = "opus55"\nvariant = "high"')), /variant/);
+    assert.throws(() => parseProjectConfig('/r', base.replace('tag = "glm53"', 'tag = "glm53"\neffort = "high"')), /effort/);
+    assert.throws(() => parseProjectConfig('/r', base.replace('tag = "opus55"', 'tag = "opus55"\neffort = "huge"')), /effort/);
     const withMode = base.replace('tag = "opus55"', 'tag = "opus55"\npermission_mode = "acceptEdits"');
-    assert.equal(parseProjectConfig('/r', md(withMode)).agents.get('opus')?.permissionMode, 'acceptEdits');
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('tag = "opus55"', 'tag = "opus55"\npermission_mode = "bypassPermissions"'))), /permission_mode/);
-});
-
-test('needs exactly one toml block', () => {
-    assert.throws(() => extractTomlBlock('no block'), /exactly one/);
-    assert.throws(() => extractTomlBlock(md('a = 1') + md('b = 2')), /exactly one/);
-});
-
-test('env file parsing', () => {
-    const env = parseEnvFile('# c\nTELEGRAM_BOT_TOKEN="1:abc"\nexport TELEGRAM_ALLOWED_USER_ID=42 # me\nX=\n');
-    assert.equal(env.TELEGRAM_BOT_TOKEN, '1:abc');
-    assert.equal(env.TELEGRAM_ALLOWED_USER_ID, '42');
-    assert.equal(env.X, '');
+    assert.equal(parseProjectConfig('/r', withMode).agents.get('opus')?.permissionMode, 'acceptEdits');
+    assert.throws(() => parseProjectConfig('/r', base.replace('tag = "opus55"', 'tag = "opus55"\npermission_mode = "bypassPermissions"')), /permission_mode/);
 });
 
 test('project commands', () => {
@@ -80,20 +66,20 @@ cmd = "deploy/serve.py"
 background = true
 ready = "open https://"
 `;
-    const c = parseProjectConfig('/r', md(base + extra));
+    const c = parseProjectConfig('/r', base + extra);
     assert.deepEqual(
         c.commands.map((x) => [x.name, x.confirm, x.background, x.description]),
         [['deploy', true, false, 'release'], ['serve', false, true, 'serve']],
     );
     assert.equal(c.commands[1].ready?.test('  open https://x:9443/'), true);
-    assert.throws(() => parseProjectConfig('/r', md(base + '[commands.d]\ncmd = "x"\nready = "y"\n')), /background/);
-    assert.throws(() => parseProjectConfig('/r', md(base + '[commands.review]\ncmd = "x"\n')), /built-in/);
-    assert.throws(() => parseProjectConfig('/r', md(base + '[commands.Deploy]\ncmd = "x"\n')), /lowercase/);
+    assert.throws(() => parseProjectConfig('/r', base + '[commands.d]\ncmd = "x"\nready = "y"\n'), /background/);
+    assert.throws(() => parseProjectConfig('/r', base + '[commands.review]\ncmd = "x"\n'), /built-in/);
+    assert.throws(() => parseProjectConfig('/r', base + '[commands.Deploy]\ncmd = "x"\n'), /lowercase/);
 });
 
 test('the example spells out every prompt as its default', () => {
-    const example = readFileSync(new URL('../CONDUCTOR.example.md', import.meta.url), 'utf8');
-    const bare = example.replace(/\[prompts\][\s\S]*?(?=^````)/m, '');
+    const example = readFileSync(new URL('../CONDUCTOR.example.toml', import.meta.url), 'utf8');
+    const bare = example.replace(/^\[prompts\][\s\S]*?(?=^\[|(?![\s\S]))/m, '');
     assert.notEqual(bare, example);
     assert.equal(parseProjectConfig('/p', example).prompts.fixNotes, 'please fix {notes}; then commit');
     assert.deepEqual(parseProjectConfig('/p', example).prompts, parseProjectConfig('/p', bare).prompts);
@@ -105,11 +91,11 @@ test('the example spells out every prompt as its default', () => {
 
 test('feedback rounds need a feedback agent and default to one', () => {
     const withFeedback = base.replace('plan = "opus"', 'plan = "opus"\nfeedback = "glm"');
-    assert.equal(parseProjectConfig('/r', md(base)).feedbackRounds, 0);
-    assert.equal(parseProjectConfig('/r', md(withFeedback)).feedbackRounds, 1);
-    assert.equal(parseProjectConfig('/r', md(`${withFeedback}\n[flow]\nfeedback_rounds = 3`)).feedbackRounds, 3);
-    assert.equal(parseProjectConfig('/r', md(`${withFeedback}\n[flow]\nfeedback_rounds = 0`)).feedbackRounds, 0);
-    assert.throws(() => parseProjectConfig('/r', md(`${base}\n[flow]\nfeedback_rounds = 2`)), /needs roles.feedback/);
-    assert.throws(() => parseProjectConfig('/r', md(`${withFeedback}\n[flow]\nfeedback_rounds = -1`)), /whole number/);
-    assert.throws(() => parseProjectConfig('/r', md(base.replace('plan = "opus"', 'plan = "opus"\nfeedback = "x"'))), /unknown agent/);
+    assert.equal(parseProjectConfig('/r', base).feedbackRounds, 0);
+    assert.equal(parseProjectConfig('/r', withFeedback).feedbackRounds, 1);
+    assert.equal(parseProjectConfig('/r', `${withFeedback}\n[flow]\nfeedback_rounds = 3`).feedbackRounds, 3);
+    assert.equal(parseProjectConfig('/r', `${withFeedback}\n[flow]\nfeedback_rounds = 0`).feedbackRounds, 0);
+    assert.throws(() => parseProjectConfig('/r', `${base}\n[flow]\nfeedback_rounds = 2`), /needs roles.feedback/);
+    assert.throws(() => parseProjectConfig('/r', `${withFeedback}\n[flow]\nfeedback_rounds = -1`), /whole number/);
+    assert.throws(() => parseProjectConfig('/r', base.replace('plan = "opus"', 'plan = "opus"\nfeedback = "x"')), /unknown agent/);
 });
