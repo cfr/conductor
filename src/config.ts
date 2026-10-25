@@ -51,6 +51,8 @@ export interface Prompts {
     gateFailed: string;
     plan: string;
     planDone: string;
+    planReadOnly: string;
+    planMoved: string;
     chat: string;
     summary: string;
 }
@@ -110,6 +112,14 @@ const defaultPrompts: Prompts = {
     planDone:
         'Please write the agreed items into PLAN.md now and commit only PLAN.md, following the ' +
         "project's commit message rules.",
+    planReadOnly:
+        'A task is running in this tree right now ({running}), so this turn is read-only: draft the ' +
+        'items in your reply instead of editing PLAN.md. They get written once the task is idle and ' +
+        'I ask for it.',
+    planMoved:
+        'Commits landed since your last turn:\n{commits}\nRe-read PLAN.md (a finished task moves its ' +
+        'item to CHANGELOG.md) and check these changes against what we planned; point out any ' +
+        'adjustments the items need.',
     chat:
         'This is a read-only chat about the project. Another agent may be working in this tree right ' +
         'now, so uncommitted changes may be theirs. Do not edit files or run anything that changes ' +
@@ -250,6 +260,8 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
         gateFailed: str(p, 'gate_failed', 'prompts', defaultPrompts.gateFailed),
         plan: str(p, 'plan', 'prompts', defaultPrompts.plan),
         planDone: str(p, 'plan_done', 'prompts', defaultPrompts.planDone),
+        planReadOnly: str(p, 'plan_read_only', 'prompts', defaultPrompts.planReadOnly),
+        planMoved: str(p, 'plan_moved', 'prompts', defaultPrompts.planMoved),
         chat: str(p, 'chat', 'prompts', defaultPrompts.chat),
         summary: str(p, 'summary', 'prompts', defaultPrompts.summary),
     };

@@ -12,6 +12,8 @@ export interface SessionRef {
     logFile?: string;
     // set while a turn runs, so a restart can tell how it ended
     turn?: { since: number; doing: string };
+    // planning commits kept so far; other commits land beside a planning session
+    planCommits?: string[];
 }
 
 export interface GateRecord {

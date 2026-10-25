@@ -77,6 +77,12 @@ write the items and commit `PLAN.md` with a message following the project's rule
 planning turn commits (also when you asked for the commit in plain text), the conductor shows the
 commit, warns about files other than `PLAN.md`, offers to undo it and, when kept, names the `/next`
 item. A `/plan done` with nothing left to write lists the session's earlier planning commits.
+`/plan` also works while a task runs (implementation, feedback, the gate, the review, or an agent
+waiting on its background jobs): its turns are then read-only, so the agent drafts items in its
+replies, and `/plan done` is refused until the task is idle. Each planning turn after commits
+landed starts with their list and asks the agent to re-read `PLAN.md` and point out adjustments.
+The planning session runs beside the task flow (reply to its messages; plain text keeps going to
+the task, `/stop plan` interrupts it) and survives `/next`.
 `/status`, `/stop`, `/agents` and `/log` do what they say.
 
 Project commands come from `[commands.<name>]` in `CONDUCTOR.toml` (`cmd`, `description`,
@@ -95,7 +101,8 @@ Agent replies are rendered from markdown to Telegram HTML (headings, bold, code 
 links, quotes, tables as preformatted text); a chunk Telegram rejects is resent as plain text.
 
 Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-review[-plan]-<tag>.md`
-and `<task-id>-plan-<tag>.md` (`plan-<date>-<topic>-<tag>.md` with no current task), in
+and `<task-id>-plan-<tag>.md` (named after the task current when `/plan` opened it;
+`plan-<date>-<topic>-<tag>.md` with none), in
 opencode's `/export` layout for both harnesses.
 
 ## Checks
@@ -113,5 +120,6 @@ Known gaps:
 
 - the gate cannot be interrupted, and a bridge restart in the middle of a turn loses that turn
   (sessions themselves resume)
-- the planning session's "PLAN.md only" rule is checked after each turn, not enforced
+- the planning session's "PLAN.md only" rule is checked after each turn, not enforced (its
+  read-only turns while a task runs are)
 - tool outputs in logs are not shortened

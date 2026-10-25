@@ -25,6 +25,9 @@ export class ClaudeAdapter implements Adapter {
     }
 }
 
+// plan mode still offers edits for approval; a read-only turn must not get one by a stray tap
+const readOnlyDenied = ['ExitPlanMode', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
+
 class ClaudeSession implements AgentSession {
     private abort: AbortController | null = null;
     readonly agent: AgentConfig;
@@ -40,8 +43,8 @@ class ClaudeSession implements AgentSession {
     }
 
     private canUseTool: CanUseTool = async (toolName, input, { suggestions }) => {
-        if (this.opts.readOnly && toolName === 'ExitPlanMode') {
-            return { behavior: 'deny', message: 'This is a read-only chat: answer in text, change nothing.' };
+        if (this.opts.readOnly && readOnlyDenied.includes(toolName)) {
+            return { behavior: 'deny', message: 'This turn is read-only: answer in text, change nothing.' };
         }
         if (toolName === 'AskUserQuestion') {
             const answers: Record<string, string> = {};
@@ -138,6 +141,10 @@ class ClaudeSession implements AgentSession {
 
     async interrupt(): Promise<void> {
         this.abort?.abort();
+    }
+
+    async setReadOnly(on: boolean): Promise<void> {
+        this.opts = { ...this.opts, readOnly: on };
     }
 
     async backgroundJobs(): Promise<string[]> {

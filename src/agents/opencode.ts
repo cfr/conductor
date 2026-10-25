@@ -302,6 +302,10 @@ class OpencodeSession implements AgentSession {
         await this.oc.api('POST', `/api/session/${this.id}/interrupt`);
     }
 
+    async setReadOnly(on: boolean): Promise<void> {
+        await this.oc.api('POST', `/api/session/${this.id}/agent`, { agent: on ? 'plan' : 'build' });
+    }
+
     async backgroundJobs(): Promise<string[]> {
         const res = await this.oc.api<{ data: { status: string; command: string; metadata?: { sessionID?: string } }[] }>(
             'GET',

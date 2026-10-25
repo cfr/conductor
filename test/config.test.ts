@@ -84,7 +84,7 @@ test('the example spells out every prompt as its default', () => {
     assert.equal(parseProjectConfig('/p', example).prompts.fixNotes, 'please fix {notes}; then commit');
     assert.deepEqual(parseProjectConfig('/p', example).prompts, parseProjectConfig('/p', bare).prompts);
     const keys = [...example.matchAll(/^(\w+) = /gm)].map((m) => m[1]);
-    for (const k of ['implement', 'review', 'fix', 'fix_notes', 'feedback', 'feedback_again', 'feedback_fix', 'continue', 'gate_failed', 'plan', 'plan_done', 'chat', 'summary']) {
+    for (const k of ['implement', 'review', 'fix', 'fix_notes', 'feedback', 'feedback_again', 'feedback_fix', 'continue', 'gate_failed', 'plan', 'plan_done', 'plan_read_only', 'plan_moved', 'chat', 'summary']) {
         assert.ok(keys.includes(k), k);
     }
 });

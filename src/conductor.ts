@@ -60,6 +60,11 @@ export class Conductor {
     private live = new Map<SessionRole, AgentSession>();
     private busy: Busy = null;
     private chatBusy = false;
+    // A planning turn while the task runs is read-only and takes no part in `busy`.
+    private planBusy = false;
+    // Turns and the steps that follow them (gate, feedback, review), counting the gaps where `busy` is null.
+    private flowing = 0;
+    private waitingJobs = new Set<Role>();
     private summaryBusy = false;
     private jobs: Jobs;
     private local: LocalConfig;
@@ -352,7 +357,7 @@ export class Conductor {
             }
             this.dropTaskSessions();
             this.state.task = item;
-            this.state.sessions = this.keepChat();
+            this.state.sessions = this.keepSideSessions();
             this.state.focus = 'implement';
             this.state.lastGate = undefined;
             this.state.feedbackRound = undefined;
@@ -403,7 +408,7 @@ export class Conductor {
         const fullId = found?.id ?? (id.includes('-') ? id : this.findLoggedId(idNumber(id))) ?? id;
         this.dropTaskSessions();
         this.state.task = found ?? { id: fullId, number: idNumber(id), text: '(done outside the conductor)' };
-        this.state.sessions = this.keepChat();
+        this.state.sessions = this.keepSideSessions();
         this.state.lastGate = undefined;
         this.state.feedbackRound = undefined;
         this.state.feedbackFixing = undefined;
@@ -541,17 +546,20 @@ export class Conductor {
         }
         const { agent, rest } = this.parseArgs(args);
         const topic = rest || 'next';
-        this.claim('plan');
-        try {
-            this.live.delete('plan');
-            const date = new Date().toISOString().slice(0, 10);
-            await this.createSession('plan', agent ?? this.project.roles.plan, `plan-${date}-${slug(topic)}`);
-            this.state.planTopic = topic;
-            this.state.focus = 'plan';
-            this.store.save();
-        } finally {
-            this.busy = null;
+        if (this.planBusy || this.busy === 'plan') {
+            throw new Error('the planning session is answering; wait for it or /stop plan');
         }
+        this.live.delete('plan');
+        const date = new Date().toISOString().slice(0, 10);
+        const name = agent ?? this.project.roles.plan;
+        const base = this.state.task ? `${this.state.task.id}-plan` : `plan-${date}-${slug(topic)}`;
+        await this.createSession('plan', name, this.freshTitle(base, name));
+        this.state.planTopic = topic;
+        // replies reach it through their routes; plain text keeps going to the running task
+        if (!this.taskRunning()) {
+            this.state.focus = 'plan';
+        }
+        this.store.save();
         const t = rest ? `: ${rest}` : '';
         await this.turn('plan', fill(this.project.prompts.plan, this.vars({ topic: t })), `planning ${topic}`);
     }
@@ -559,6 +567,11 @@ export class Conductor {
     private async planDone() {
         if (!this.state.sessions.plan) {
             await this.chat.send('no planning session; /plan first');
+            return;
+        }
+        const running = this.runningTask();
+        if (running) {
+            await this.chat.send(`${running} is running; /plan done writes PLAN.md once the task is idle`);
             return;
         }
         const root = this.project.root;
@@ -571,8 +584,8 @@ export class Conductor {
             await this.chat.send('PLAN.md changed but nothing was committed');
             return;
         }
-        const start = this.state.sessions.plan?.startSha;
-        const earlier = start ? (await git(root, 'log', '--reverse', '--format=%h %s', `${start}..HEAD`, '--', 'PLAN.md')).trim() : '';
+        const kept = this.state.sessions.plan?.planCommits ?? [];
+        const earlier = kept.length ? (await git(root, 'log', '--no-walk=unsorted', '--format=%h %s', ...kept)).trim() : '';
         if (!earlier) {
             await this.chat.send('no commit; PLAN.md is unchanged');
             return;
@@ -610,6 +623,11 @@ export class Conductor {
         await this.chat.sendFile('PLAN.diff', await repo.diff(root, before), 'PLAN.md changes');
         const commits = await repo.commitsSince(root, before);
         if ((await this.chat.ask('Keep the planning commit?', ['keep', 'undo commit'], false)) !== 'undo commit') {
+            const kept = this.state.sessions.plan;
+            if (kept) {
+                kept.planCommits = [...(kept.planCommits ?? []), ...[...commits].reverse()];
+                this.store.save();
+            }
             const hint = this.nextHint();
             if (hint) {
                 await this.chat.send(hint);
@@ -630,13 +648,24 @@ export class Conductor {
         await this.chat.send(`planning commit undone; HEAD is back at ${before.slice(0, 7)}`);
     }
 
-    private keepChat(): State['sessions'] {
-        return this.state.sessions.chat ? { chat: this.state.sessions.chat } : {};
+    // the chat and the planning session run beside the tasks and outlive them
+    private keepSideSessions(): State['sessions'] {
+        const { chat, plan } = this.state.sessions;
+        return { ...(chat ? { chat } : {}), ...(plan ? { plan } : {}) };
+    }
+
+    private freshTitle(base: string, agentName: string): string {
+        const tag = this.agent(agentName).tag;
+        let title = base;
+        for (let n = 2; existsSync(join(this.project.logDir, `${title}-${tag}.md`)); n++) {
+            title = `${base}-${n}`;
+        }
+        return title;
     }
 
     private dropTaskSessions() {
         for (const role of [...this.live.keys()]) {
-            if (role !== 'chat') {
+            if (role !== 'chat' && role !== 'plan') {
                 this.live.delete(role);
             }
         }
@@ -667,13 +696,8 @@ export class Conductor {
             }
             const date = new Date().toISOString().slice(0, 10);
             const base = this.state.task ? `${this.state.task.id}-chat` : `chat-${date}`;
-            const tag = this.agent(wanted).tag;
-            let title = base;
-            for (let n = 2; existsSync(join(this.project.logDir, `${title}-${tag}.md`)); n++) {
-                title = `${base}-${n}`;
-            }
             this.live.delete('chat');
-            await this.createSession('chat', wanted, title);
+            await this.createSession('chat', wanted, this.freshTitle(base, wanted));
             ref = this.state.sessions.chat!;
             if (!rest) {
                 await this.chat.send(`${this.prefix('chat')} new read-only chat; /chat <message> or reply to its messages`);
@@ -727,7 +751,7 @@ export class Conductor {
                 readOnly: true,
             });
             const task = this.state.task?.id ?? ref.title;
-            const running = this.busy === target || (target === 'chat' && this.chatBusy);
+            const running = this.busy === target || (target === 'chat' && this.chatBusy) || (target === 'plan' && this.planBusy);
             const state = running ? 'still running' : 'idle (its last turn has ended)';
             const r = await s.send(fill(this.project.prompts.summary, { log, role: target, task, state }));
             if (r.text) {
@@ -804,21 +828,92 @@ export class Conductor {
     }
 
     private async turn(role: Role, text: string, doing: string, gateAttempt = 0, quote = true) {
+        if (role === 'plan') {
+            await this.planTurn(text, doing, quote);
+            return;
+        }
         this.claim(role);
+        this.flowing++;
+        try {
+            let r: TurnResult;
+            let settled: { waiting: boolean; from?: string };
+            try {
+                const head = `${this.prefix(role)} ${doing}…`;
+                await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
+                this.markTurn(role, { since: Date.now(), doing });
+                r = await this.session(role).send(text);
+                settled = await this.settle(role, r);
+            } finally {
+                this.markTurn(role, undefined);
+                this.busy = null;
+            }
+            if (!settled.waiting) {
+                await this.afterTurn(role, r, settled.from, gateAttempt);
+            }
+        } finally {
+            this.flowing--;
+        }
+    }
+
+    private runningTask(): string | undefined {
+        if (this.busy && this.busy !== 'plan') {
+            return this.busy;
+        }
+        const waiting = [...this.waitingJobs][0];
+        if (waiting) {
+            return `${waiting} (background jobs)`;
+        }
+        return this.flowing > 0 ? 'the task flow' : undefined;
+    }
+
+    private taskRunning(): boolean {
+        return this.runningTask() !== undefined;
+    }
+
+    // Read-only while a task runs, so the planner never edits PLAN.md under an implementer that moves its item.
+    private async planTurn(text: string, doing: string, quote: boolean) {
+        if (this.planBusy) {
+            throw new Error('the planning session is answering; wait for it or /stop plan');
+        }
+        const running = this.runningTask();
+        if (!running) {
+            this.claim('plan');
+        }
+        this.planBusy = true;
         let r: TurnResult;
         let settled: { waiting: boolean; from?: string };
         try {
-            const head = `${this.prefix(role)} ${doing}…`;
-            await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
-            this.markTurn(role, { since: Date.now(), doing });
-            r = await this.session(role).send(text);
-            settled = await this.settle(role, r);
+            const root = this.project.root;
+            const ref = this.state.sessions.plan!;
+            const seen = ref.checkedSha ?? ref.startSha;
+            const head = await repo.head(root);
+            const notes: string[] = [];
+            if (head !== seen) {
+                const commits = (await git(root, 'log', '--format=%h %s', `${seen}..${head}`)).trim();
+                notes.push(fill(this.project.prompts.planMoved, { commits }));
+            }
+            if (running) {
+                notes.push(fill(this.project.prompts.planReadOnly, { running }));
+            }
+            ref.checkedSha = head;
+            this.store.save();
+            const message = [...notes, text].join('\n\n');
+            const line = `${this.prefix('plan')} ${doing}${running ? ' (read-only while the task runs)' : ''}…`;
+            await (quote ? this.chat.sendQuoted(line, message, 'plan') : this.chat.send(line, 'plan'));
+            this.markTurn('plan', { since: Date.now(), doing });
+            const session = this.session('plan');
+            await session.setReadOnly(running !== undefined);
+            r = await session.send(message);
+            settled = await this.settle('plan', r, running !== undefined);
         } finally {
-            this.markTurn(role, undefined);
-            this.busy = null;
+            this.markTurn('plan', undefined);
+            this.planBusy = false;
+            if (!running) {
+                this.busy = null;
+            }
         }
         if (!settled.waiting) {
-            await this.afterTurn(role, r, settled.from, gateAttempt);
+            await this.afterTurn('plan', r, settled.from, 0);
         }
     }
 
@@ -883,7 +978,8 @@ export class Conductor {
     }
 
     // `from`: the commit before the session's new commits, when it committed since it was last checked.
-    private async settle(role: Role, r: TurnResult): Promise<{ waiting: boolean; from?: string }> {
+    private async settle(role: Role, r: TurnResult, readOnly = false): Promise<{ waiting: boolean; from?: string }> {
+        this.waitingJobs.delete(role);
         await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
         const p = this.prefix(role);
         if (r.text) {
@@ -897,7 +993,11 @@ export class Conductor {
         if (jobs.length) {
             const list = jobs.map((j) => `  ${j.split('\n')[0].slice(0, 120)}`).join('\n');
             await this.chat.send(`${p} ended its turn with background jobs running; waiting for it to resume when they exit:\n${list}`, role);
+            this.waitingJobs.add(role);
             return { waiting: true };
+        }
+        if (readOnly) {
+            return { waiting: false };
         }
         const root = this.project.root;
         const ref = this.state.sessions[role]!;
@@ -946,16 +1046,21 @@ export class Conductor {
             return;
         }
         this.claim(role);
-        let r: TurnResult;
-        let settled: { waiting: boolean; from?: string };
+        this.flowing++;
         try {
-            r = { outcome: ev.outcome, error: ev.error, text: await this.session(role).lastReply() };
-            settled = await this.settle(role, r);
+            let r: TurnResult;
+            let settled: { waiting: boolean; from?: string };
+            try {
+                r = { outcome: ev.outcome, error: ev.error, text: await this.session(role).lastReply() };
+                settled = await this.settle(role, r);
+            } finally {
+                this.busy = null;
+            }
+            if (!settled.waiting) {
+                await this.afterTurn(role, r, settled.from, 0);
+            }
         } finally {
-            this.busy = null;
-        }
-        if (!settled.waiting) {
-            await this.afterTurn(role, r, settled.from, 0);
+            this.flowing--;
         }
     }
 
@@ -1040,11 +1145,8 @@ export class Conductor {
 
     private logName(role: SessionRole, ref: SessionRef, planTouched: boolean): string {
         const tag = this.agent(ref.agent).tag;
-        if (role === 'chat') {
+        if (role === 'chat' || role === 'plan') {
             return `${ref.title}-${tag}.md`;
-        }
-        if (role === 'plan') {
-            return this.state.task ? `${this.state.task.id}-plan-${tag}.md` : `${ref.title}-${tag}.md`;
         }
         const id = this.state.task?.id ?? ref.title;
         if (role === 'implement') {
@@ -1101,6 +1203,11 @@ export class Conductor {
             await this.chat.send(`interrupt sent to ${this.prefix('chat')}`);
             return;
         }
+        if (this.planBusy && (args === 'plan' || !busy || busy === 'plan')) {
+            await this.session('plan').interrupt();
+            await this.chat.send(`interrupt sent to ${this.prefix('plan')}`);
+            return;
+        }
         if (!busy || !roles.includes(busy)) {
             await this.chat.send(busy ? `${busy} is running; it cannot be stopped yet` : 'nothing is running');
             return;
@@ -1126,7 +1233,7 @@ export class Conductor {
         const lines = [
             `project: ${code(this.project.root)}`,
             `task: ${escapeHtml(s.task?.id ?? '-')}`,
-            `running: ${escapeHtml(this.busy ?? 'nothing')}${this.chat.pendingQuestions() ? ` (${this.chat.pendingQuestions()} question(s) waiting)` : ''}`,
+            `running: ${escapeHtml(this.runningTask() ?? 'nothing')}${this.planBusy ? ' (plan answering)' : ''}${this.chat.pendingQuestions() ? ` (${this.chat.pendingQuestions()} question(s) waiting)` : ''}`,
             `focus: ${s.focus ?? '-'}${this.chatBusy ? ' (chat answering)' : ''}`,
         ];
         for (const [role, ref] of Object.entries(s.sessions)) {

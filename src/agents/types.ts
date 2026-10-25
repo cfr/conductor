@@ -48,6 +48,8 @@ export interface AgentSession {
     turnState(since: number): Promise<TurnState>;
     // Commands of the session's background jobs still running; the harness resumes the session when one exits.
     backgroundJobs(): Promise<string[]>;
+    // Applies from the next turn on.
+    setReadOnly(on: boolean): Promise<void>;
 }
 
 export type UnsolicitedEvent =

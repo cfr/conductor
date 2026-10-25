@@ -100,6 +100,15 @@ changes and no commits. Discuss with me first; I will say when to write the item
 plan_done = """
 Please write the agreed items into PLAN.md now and commit only PLAN.md, following the \
 project's commit message rules."""
+plan_read_only = """
+A task is running in this tree right now ({running}), so this turn is read-only: draft the \
+items in your reply instead of editing PLAN.md. They get written once the task is idle and \
+I ask for it."""
+plan_moved = """
+Commits landed since your last turn:
+{commits}
+Re-read PLAN.md (a finished task moves its item to CHANGELOG.md) and check these changes against \
+what we planned; point out any adjustments the items need."""
 chat = """
 This is a read-only chat about the project. Another agent may be working in this tree right \
 now, so uncommitted changes may be theirs. Do not edit files or run anything that changes \

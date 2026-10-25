@@ -62,9 +62,9 @@ tag = "opus55"
 - `variant` (optional, `opencode` only) picks the model variant opencode offers (`default`, or
   e.g. `low`/`high`/`max` thinking); checked against opencode's model list when a session starts.
 - `[prompts]` overrides the text sent at each step (`implement`, `review`, `fix`, `fix_notes`,
-  `continue`, `gate_failed`, `plan`, `plan_done`, `chat`, `summary`; `CONDUCTOR.example.toml` lists
+  `continue`, `gate_failed`, `plan`, `plan_done`, `plan_read_only`, `plan_moved`, `chat`, `summary`; `CONDUCTOR.example.toml` lists
   the defaults); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}`, `{topic}`, `{message}`, `{log}`,
-  `{role}`, `{task}` and `{state}` are filled in. `[logs] dir` sets the log directory (default
+  `{role}`, `{task}`, `{state}`, `{running}` and `{commits}` are filled in. `[logs] dir` sets the log directory (default
   `wlog`).
 - `tag` names the model everywhere it shows: the suffix in `wlog/` file names (so existing
   names like `glm53` and `opus55` carry on) and the prefix of chat messages (`[glm53 0038]`).
@@ -213,6 +213,13 @@ only `PLAN.md` (no code; it commits only on `/plan done`). The conversation runs
 knows what changed and follows the project's commit rules); the bridge posts the commit message
 and diff, warns if the commit touches more than `PLAN.md`, and offers keep / undo commit (`git
 reset --keep`, only while HEAD is still that commit).
+
+The session runs beside the task flow and survives `/next`. While a task runs (any turn, the gate,
+the steps between them, or a session waiting on its background jobs), a planning turn is read-only
+(Claude plan mode with edit tools refused, opencode's `plan` agent), its message starts with
+`plan_read_only`, and `/plan done` is refused: the implementer moves its item out of `PLAN.md`
+and commits the tree, so the two must not edit it at once. A planning turn after other commits
+landed starts with `plan_moved` (their list), so the agent re-reads `PLAN.md` before going on.
 
 ## Shape
 
