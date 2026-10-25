@@ -44,7 +44,11 @@ class ClaudeSession implements AgentSession {
 
     private canUseTool: CanUseTool = async (toolName, input, { suggestions }) => {
         if (this.opts.readOnly && readOnlyDenied.includes(toolName)) {
-            return { behavior: 'deny', message: 'This turn is read-only: answer in text, change nothing.' };
+            const message =
+                toolName === 'ExitPlanMode'
+                    ? 'This turn is read-only and nobody sees a plan: put its full text in your reply.'
+                    : 'This turn is read-only: answer in text, change nothing.';
+            return { behavior: 'deny', message };
         }
         if (toolName === 'AskUserQuestion') {
             const answers: Record<string, string> = {};
