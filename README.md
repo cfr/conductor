@@ -26,6 +26,9 @@ commands and optional prompts. `CONDUCTOR.example.toml` is the one for bane.
 
     npm start
 
+Console lines carry a local timestamp. Ctrl-C stops the conductor (its background commands too); a
+second Ctrl-C, or 15 seconds without finishing, forces the exit.
+
 Then `/help` in the chat. The usual loop:
 
 - `/next [agent] [id]`: confirm, and the implementing agent starts on the first `PLAN.md` "Next"
@@ -65,7 +68,8 @@ it missed) is still picked up at the end of the next one.
 plan mode, opencode's `plan` agent) that runs alongside the task flow: reply to its messages to
 continue, `/chat new` starts over, `/stop chat` interrupts it, `/chat stop` closes it (the log
 stays). It uses `roles.chat` (default: the planning agent), survives `/next`, and logs to
-`<task-id>-chat-<tag>.md`.
+`<task-id>-chat-<tag>.md` (`chat-<date>-<tag>.md` with no task). A Claude Code agent that tries to
+hand in a plan there (`ExitPlanMode`) is told nobody sees it and asked to put it in its reply.
 
 `/summary [implement|feedback|review|plan|chat] [agent]` has a one-off read-only session
 (`roles.summary`, default: the chat agent) read the running session's log, or the focused one's, and
@@ -99,11 +103,14 @@ never run these.
 
 Agent replies are rendered from markdown to Telegram HTML (headings, bold, code blocks, lists,
 links, quotes, tables as preformatted text); a chunk Telegram rejects is resent as plain text.
+Command output is posted as a code block, cut to its newest lines. Telegram calls that fail on the
+network are retried for about three minutes.
 
-Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-review[-plan]-<tag>.md`
-and `<task-id>-plan-<tag>.md` (named after the task current when `/plan` opened it;
-`plan-<date>-<topic>-<tag>.md` with none), in
-opencode's `/export` layout for both harnesses.
+Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-feedback-<tag>.md`,
+`<task-id>-review[-plan]-<tag>.md`, `<task-id>-chat-<tag>.md` and `<task-id>-plan-<tag>.md` (named
+after the task current when `/plan` opened it; `plan-<date>-<topic>-<tag>.md` with none), in
+opencode's `/export` layout for both harnesses. A new chat or planning session whose log name is
+taken gets a `-2`, `-3`, ... suffix.
 
 ## Checks
 
@@ -112,14 +119,14 @@ opencode's `/export` layout for both harnesses.
 
 ## Status
 
-Prototype. Driven end to end headlessly (a fake chat) against a throwaway repo: implement with
-GLM-5.3 flash, gate, gate failure handed back and fixed, auto-review and `/fix` with Haiku 5.5
-(including a permission prompt), log export. Not yet run against Telegram itself.
+Prototype, in daily use on bane over Telegram: GLM-5.3 implements, DeepSeek V4.1 Flash runs the
+feedback check, Opus 5.5 reviews, chats and plans.
 
 Known gaps:
 
-- the gate cannot be interrupted, and a bridge restart in the middle of a turn loses that turn
-  (sessions themselves resume)
+- the gate cannot be interrupted
+- a turn that fails on a provider network error stays failed: `/continue` resumes it, nothing
+  retries by itself
 - the planning session's "PLAN.md only" rule is checked after each turn, not enforced (its
   read-only turns while a task runs are)
 - tool outputs in logs are not shortened

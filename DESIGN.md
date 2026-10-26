@@ -12,13 +12,12 @@ the number is the `PLAN.md` "Next" item and the commit tag (`#0038`), the words 
 kebab-case slug. The id names everything the task produces:
 
 - agent session titles: `0038-capsule-primitives` (implementation), `0038-capsule-primitives
-  review` (review and fixes)
+  feedback` (feedback checks), `0038-capsule-primitives review` (review and fixes)
 - logs: `wlog/<id>[-<step>]-<agent-log-name>.md` (see "Logs")
 - commits: tagged `#0038` as `AGENTS.md` requires
 
-The slug is derived from the PLAN item's title (`#0038 capsule primitives: ...` gives
-`capsule-primitives`); the bridge shows it with `/next` so it can be changed before work
-starts.
+The id is the PLAN item's heading (`0038-capsule-primitives`); `/next` shows it with the item
+text before work starts.
 
 ## Agents
 
@@ -62,10 +61,11 @@ tag = "opus55"
 - `variant` (optional, `opencode` only) picks the model variant opencode offers (`default`, or
   e.g. `low`/`high`/`max` thinking); checked against opencode's model list when a session starts.
 - `[prompts]` overrides the text sent at each step (`implement`, `review`, `fix`, `fix_notes`,
-  `continue`, `gate_failed`, `plan`, `plan_done`, `plan_read_only`, `plan_moved`, `chat`, `summary`; `CONDUCTOR.example.toml` lists
-  the defaults); `{id}`, `{num}`, `{notes}`, `{step}`, `{output}`, `{topic}`, `{message}`, `{log}`,
-  `{role}`, `{task}`, `{state}`, `{running}` and `{commits}` are filled in. `[logs] dir` sets the log directory (default
-  `wlog`).
+  `feedback`, `feedback_again`, `feedback_fix`, `continue`, `gate_failed`, `plan`, `plan_done`,
+  `plan_read_only`, `plan_moved`, `chat`, `summary`; `CONDUCTOR.example.toml` lists the
+  defaults); `{id}`, `{num}`, `{base}`, `{notes}`, `{step}`, `{output}`, `{findings}`, `{reply}`,
+  `{topic}`, `{message}`, `{log}`, `{role}`, `{task}`, `{state}`, `{running}` and `{commits}` are
+  filled in. `[logs] dir` sets the log directory (default `wlog`).
 - `tag` names the model everywhere it shows: the suffix in `wlog/` file names (so existing
   names like `glm53` and `opus55` carry on) and the prefix of chat messages (`[glm53 0038]`).
 - `[gate]` is the verification the bridge runs after each committing step, in order; a
@@ -123,12 +123,18 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
 
 - `/next [agent] [id]`: start the next PLAN item (or a given one) with an agent from the
   config; arguments are told apart by shape (an id starts with digits)
-- `/review [agent]`, `/fix [notes]`: as above, for the current task
-- `/plan [agent] [topic]`: open a planning discussion (see below)
+- `/review [agent] [id]`, `/fix [notes]`, `/feedback [agent]`: as above, for the current task
+  (`/review <id>` also takes a task done outside the conductor)
+- `/continue [role] [notes]`: resume a turn that stopped early (an error, `/stop`, a restart)
+- `/gate`: run the gate on the current session's commits by hand, then continue as after a turn
+- `/todo [id]`: list the `PLAN.md` "Next" items, or show one in full
+- `/plan [agent] [topic]`, `/plan done`: a planning discussion (see below)
+- `/chat [new] [agent] <message>`, `/chat stop`, `/summary [role] [agent]`: see "Chat"
 - `/agents`: list configured agents and role defaults
 - `/status`: current task, step, which agent is running, last gate result
-- `/stop`: interrupt the running agent
+- `/stop [chat|plan]`: interrupt the running agent (or the chat, or the planner)
 - `/log`: export the current sessions to `wlog/` now
+- `/<name> [args]`, `/<name> stop`: project commands from `[commands]` (see README)
 - plain text: goes to the agent of the current step; a Telegram reply to an agent's message goes
   to that message's session, whatever the current step is
 
@@ -144,7 +150,8 @@ idle, so `wlog/` is always current, even for a task that is abandoned halfway. T
   `review-plan` when the review session also edited `PLAN.md` (a `/plan` discussion inside
   the review, which is what `-review-plan-` means in today's names). A `/plan` session
   writes `wlog/<task-id>-plan-<tag>.md`, or `wlog/plan-<date>-<topic>-<tag>.md` when there is no
-  current task.
+  current task; `/chat` writes `wlog/<task-id>-chat-<tag>.md` (`chat-<date>-<tag>.md`). A new
+  chat or planning session whose name is taken gets a `-2`, `-3`, ... suffix.
 - `<tag>` is the agent's `tag` from the config.
 - A second session for the same step (a review restarted with another agent) gets its own file
   through its different suffix; a restart with the same agent overwrites the file, and the
@@ -195,10 +202,11 @@ one chat stays readable.
 ## Chat
 
 `/chat [new] [agent] <message>` opens or continues a read-only session for questions about the
-project while a task runs: Claude agents run it in plan mode (with `ExitPlanMode` refused),
-opencode agents with its read-only `plan` agent, and its first message says another agent may be
-changing the tree. It has its own busy flag, so it never waits for or blocks the task flow, and
-it is not reset by `/next`. Replies to its messages reach it; plain text keeps going to the task.
+project while a task runs: Claude agents run it in plan mode (with `ExitPlanMode` and the edit
+tools refused; the refusal asks for the plan in the reply, since nobody sees it), opencode agents
+with its read-only `plan` agent, and its first message says another agent may be changing the
+tree. It has its own busy flag, so it never waits for or blocks the task flow, and it is not reset
+by `/next`. Replies to its messages reach it; plain text keeps going to the task.
 
 `/summary [role] [agent]` asks how a session is going without disturbing it: the conductor exports
 that session's log as it stands (the running one by default, else the focused one), and a fresh
@@ -208,7 +216,8 @@ in a few bullets. The summary session is one-off: not kept in state, not logged,
 ## Planning discussion
 
 `/plan [agent] [topic]` opens a session (default `roles.plan`) that may read the repo and edit
-only `PLAN.md` (no code; it commits only on `/plan done`). The conversation runs in the chat like any other session.
+only `PLAN.md` (no code). It commits on `/plan done`, or when asked to in plain text; the bridge
+handles both the same way. The conversation runs in the chat like any other session.
 `/plan done` asks the agent to write the agreed items into `PLAN.md` and commit it (the agent
 knows what changed and follows the project's commit rules); the bridge posts the commit message
 and diff, warns if the commit touches more than `PLAN.md`, and offers keep / undo commit (`git
@@ -238,9 +247,9 @@ landed starts with `plan_moved` (their list), so the agent re-reads `PLAN.md` be
   `http://127.0.0.1:49374`, password from `opencode service get password`), not a private
   `opencode serve`, so bridge sessions also show up in the TUI.
 - `claude` adapter: Claude Code via the Agent SDK, one `query()` per turn (`sessionId` on the
-  first, `resume` after), with the `claude_code` system prompt preset and the user's settings
-  (permission mode included). `canUseTool` receives permission prompts and `AskUserQuestion`,
-  whose answers go back as `updatedInput.answers`.
+  first, `resume` after), with the `claude_code` system prompt preset and the agent's
+  `permission_mode` (`plan` for read-only turns). `canUseTool` receives permission prompts and
+  `AskUserQuestion`, whose answers go back as `updatedInput.answers`.
 - tmux stays useful for watching: the bridge runs in a pane, and sessions can still be resumed
   locally from their ids.
 
@@ -254,8 +263,8 @@ landed starts with `plan_moved` (their list), so the agent re-reads `PLAN.md` be
   e.g. `/deploy`, `/serve`) run only when I send them, with a confirmation button where
   `confirm` is set, and a one-shot command never overlaps an agent turn or the gate.
 - The bridge's own gate run is the result it reports, not the agent's claim.
-- Long output (diffs, logs, gate failures) goes as attached files; messages stay under
-  Telegram's 4096-character limit.
+- Long output (diffs, logs, gate failures) goes as attached files; command output is posted as
+  a code block cut to its newest lines; messages stay under Telegram's 4096-character limit.
 
 ## Open questions
 
