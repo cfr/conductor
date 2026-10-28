@@ -36,9 +36,10 @@ Then `/help` in the chat. The usual loop:
 - after a turn that committed, the gate runs; a failure goes back to the agent once
 - when the gate passes, the feedback agent (`roles.feedback`, if set) checks the work and reports;
   the implementer fixes and commits, the gate runs, and this repeats up to `[flow]
-  feedback_rounds` times (default: one per agent); a list such as `["dsf", "mm"]` gives each round
-  the next agent, which checks the work afresh even after a clean verdict, while a repeat of the
-  same agent rechecks the fixes and stops at a clean one; `/feedback [agent]` adds a round
+  feedback_rounds` times (default: one per agent); a list such as `["glm", "glm", "mm"]` gives each
+  round the next agent, a repeat rechecks the fixes in the same session, and a new agent checks the
+  work afresh; a clean verdict skips the current agent's remaining rechecks and moves on to the
+  next agent; `/feedback [agent]` adds a round
 - then the review starts by itself and its findings are posted
 - `/fix [notes]`: the reviewer fixes and commits, the gate runs again
 - `/continue [role] [notes]` resumes a turn that stopped early (a provider error, `/stop`, a

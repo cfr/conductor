@@ -434,11 +434,14 @@ export class Conductor {
         return undefined;
     }
 
-    // the agent of the next round in roles.feedback, the last one repeating
-    private nextFeedbackAgent(): string | undefined {
+    // the agent of round done + 1 in roles.feedback, the last one repeating
+    private feedbackAgentAt(done: number): string | undefined {
         const list = this.project.roles.feedback;
-        const done = this.state.feedbackRound ?? 0;
         return done < this.project.feedbackRounds ? list[Math.min(done, list.length - 1)] : undefined;
+    }
+
+    private nextFeedbackAgent(): string | undefined {
+        return this.feedbackAgentAt(this.state.feedbackRound ?? 0);
     }
 
     private async afterImplementGate() {
@@ -450,10 +453,17 @@ export class Conductor {
         }
     }
 
-    // Nothing to recheck: a further round only runs when another agent checks afresh.
+    // Nothing to recheck: the current agent's remaining rounds are skipped and the next listed agent checks afresh.
     private async afterSettledCheck(why: string) {
-        const next = this.nextFeedbackAgent();
-        if (next && next !== this.state.sessions.feedback?.agent) {
+        const current = this.state.sessions.feedback?.agent;
+        let done = this.state.feedbackRound ?? 0;
+        while (done < this.project.feedbackRounds && this.feedbackAgentAt(done) === current) {
+            done++;
+        }
+        const next = this.feedbackAgentAt(done);
+        if (next) {
+            this.state.feedbackRound = done;
+            this.store.save();
             await this.chat.send(`${why}; next check by ${this.agent(next).tag}`);
             await this.runFeedback(next);
             return;
