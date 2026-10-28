@@ -39,6 +39,13 @@ model = "claude-opus-5-5"
 effort = "medium"
 tag = "opus55"
 
+# Replace model with a Codex model available to your account.
+[agents.codex]
+harness = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
+tag = "codex"
+
 [flow]
 # feedback checks (roles.feedback reports, the implementer fixes) before the review; defaults to
 # the length of roles.feedback, 0 skips them
@@ -57,6 +64,7 @@ cmd = "cmake --build build-wasm && exec deploy/serve.py"
 description = "rebuild wasm and serve it over https with a local game server"
 background = true
 ready = "open https://"
+aliases = ["server"]
 
 [prompts]
 implement = "please do {id}"

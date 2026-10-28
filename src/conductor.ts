@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { CodexAdapter } from './agents/codex.ts';
 import { ClaudeAdapter } from './agents/claude.ts';
 import { OpencodeAdapter } from './agents/opencode.ts';
 import type { Adapter, AgentSession, Asker, Question, TurnResult, TurnState, UnsolicitedEvent } from './agents/types.ts';
@@ -76,12 +77,14 @@ export class Conductor {
         this.store = store;
         this.chat = chat;
         this.project = loadProjectConfig(local.project);
-        this.adapters = { opencode: new OpencodeAdapter(local.opencodeUrl), claude: new ClaudeAdapter() };
+        this.adapters = { opencode: new OpencodeAdapter(local.opencodeUrl), claude: new ClaudeAdapter(), codex: new CodexAdapter(join(dirname(local.stateFile), 'codex')) };
         this.jobs = new Jobs(join(dirname(local.stateFile), 'commands'));
         chat.command('help', async () => chat.send(this.help()));
         chat.command('start', async () => chat.send(this.help()));
         for (const c of this.project.commands) {
-            chat.command(c.name, (a) => this.projectCommand(c.name, a));
+            for (const name of [c.name, ...c.aliases]) {
+                chat.command(name, (a) => this.projectCommand(c.name, a));
+            }
         }
         chat.command('next', (a) => this.nextTask(a));
         chat.command('review', (a) => this.review(a));
@@ -113,7 +116,8 @@ export class Conductor {
     private help(): string {
         const extra = this.project.commands.map((c) => {
             const usage = c.background ? ` [stop]` : '';
-            return `/${c.name}${usage} - ${c.description}${c.background ? ' (runs in the background)' : ''}`;
+            const also = c.aliases.length ? ` (also ${c.aliases.map((a) => `/${a}`).join(', ')})` : '';
+            return `/${c.name}${usage} - ${c.description}${c.background ? ' (runs in the background)' : ''}${also}`;
         });
         return extra.length ? `${help}\n\nProject commands:\n${extra.join('\n')}` : help;
     }
@@ -504,6 +508,7 @@ export class Conductor {
             }
             this.state.sessions.feedback!.checkedSha = await repo.head(this.project.root);
             this.state.feedbackRound = round;
+            this.state.feedbackReportRetried = undefined;
             this.state.focus = 'feedback';
             this.store.save();
         } finally {
@@ -521,7 +526,29 @@ export class Conductor {
             return;
         }
         if (!verdict) {
-            await this.chat.send('feedback: no VERDICT line; taking the reply as findings');
+            this.state.focus = 'feedback';
+            if (this.state.feedbackReportRetried) {
+                this.store.save();
+                await this.chat.send(
+                    'feedback: still no VERDICT after one retry; task flow paused. ' +
+                    'Use /continue feedback to finish the report, /feedback <agent> for another check, ' +
+                    'or /review to proceed to review.',
+                );
+                return;
+            }
+            this.state.feedbackReportRetried = true;
+            this.store.save();
+            await this.chat.send('feedback: no VERDICT line; asking the checker to finish its report once');
+            await this.turn(
+                'feedback',
+                'Your previous turn ended without a feedback verdict. Finish your review and return the ' +
+                'complete report now. Report only: do not edit files or commit. Include actionable findings ' +
+                'with file:line and evidence, or state that none were found. End with exactly ' +
+                'VERDICT: clean or VERDICT: findings. If you cannot finish, explain what blocked you; ' +
+                'do not claim a clean review.',
+                `completing feedback ${this.state.feedbackRound ?? 1} on ${task.id}`,
+            );
+            return;
         }
         this.state.feedbackFixing = true;
         this.state.focus = 'implement';

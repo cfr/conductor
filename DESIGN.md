@@ -53,8 +53,8 @@ tag = "opus55"
 ```
 
 - `harness` picks the adapter: `opencode` (model ids as `opencode models` prints them,
-  `provider/model`) or `claude` (Claude Code model ids or aliases).
-- `effort` (optional, `claude` only) sets the Claude Code effort level (`low` to `max`).
+  `provider/model`) `claude` (Claude Code model ids or aliases), or `codex` (Codex CLI model ids).
+- `effort` (optional, `claude` or `codex`) sets the harness effort level (`low` to `max`).
 - `permission_mode` (optional, `claude` only, default `auto`): the Claude Code permission mode.
   SDK sessions would otherwise start in `default`, which asks for every write command, while
   interactive sessions run in `auto`. `bypassPermissions` is not accepted.
@@ -271,3 +271,8 @@ landed starts with `plan_moved` (their list), so the agent re-reads `PLAN.md` be
 ## Open questions
 
 None right now.
+
+Codex uses `codex exec --json`, persists its thread id and event transcript beside conductor state,
+and uses `exec resume` for follow-up turns. Sandbox policy is set on every turn (read-only or
+workspace-write). Exec approvals are disabled; denied escalations cannot be approved from Telegram.
+See README "Codex" for setup and lifecycle limits.

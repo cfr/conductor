@@ -65,6 +65,7 @@ confirm = true
 cmd = "deploy/serve.py"
 background = true
 ready = "open https://"
+aliases = ["server"]
 `;
     const c = parseProjectConfig('/r', base + extra);
     assert.deepEqual(
@@ -75,6 +76,10 @@ ready = "open https://"
     assert.throws(() => parseProjectConfig('/r', base + '[commands.d]\ncmd = "x"\nready = "y"\n'), /background/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.review]\ncmd = "x"\n'), /built-in/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.Deploy]\ncmd = "x"\n'), /lowercase/);
+    assert.deepEqual(c.commands.map((x) => x.aliases), [[], ['server']]);
+    assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["deploy"]')), /already taken/);
+    assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["feedback"]')), /built-in/);
+    assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["Srv"]')), /lowercase/);
 });
 
 test('the example spells out every prompt as its default', () => {

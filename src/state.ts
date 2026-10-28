@@ -32,6 +32,8 @@ export interface State {
     // feedback checks run for the current task, and whether the implementer is answering one
     feedbackRound?: number;
     feedbackFixing?: boolean;
+    // Persist the retry budget across restarts and failed retry turns.
+    feedbackReportRetried?: boolean;
 }
 
 export class Store {

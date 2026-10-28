@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { parse } from 'smol-toml';
 
-export type Harness = 'opencode' | 'claude';
+export type Harness = 'opencode' | 'claude' | 'codex';
 export type Role = 'implement' | 'feedback' | 'review' | 'plan';
 export type SessionRole = Role | 'chat';
 
@@ -27,11 +27,13 @@ export interface ProjectCommand {
     confirm: boolean;
     background: boolean;
     ready?: RegExp;
+    // other names it answers to, kept out of the command menu
+    aliases: string[];
 }
 
 export const builtinCommands = [
-    'help', 'start', 'next', 'review', 'fix', 'continue', 'gate', 'todo', 'plan', 'chat', 'summary', 'agents', 'status',
-    'stop', 'log',
+    'help', 'start', 'next', 'review', 'fix', 'feedback', 'continue', 'gate', 'todo', 'plan', 'chat', 'summary', 'agents',
+    'status', 'stop', 'log',
 ];
 
 export interface GateStep {
@@ -207,8 +209,8 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
     for (const [name, raw] of Object.entries(table(t.agents, 'agents'))) {
         const a = table(raw, `agents.${name}`);
         const harness = str(a, 'harness', `agents.${name}`);
-        if (harness !== 'opencode' && harness !== 'claude') {
-            throw new Error(`agents.${name}.harness must be "opencode" or "claude"`);
+        if (harness !== 'opencode' && harness !== 'claude' && harness !== 'codex') {
+            throw new Error(`agents.${name}.harness must be "opencode", "claude" or "codex"`);
         }
         const model = str(a, 'model', `agents.${name}`);
         if (harness === 'opencode' && !model.includes('/')) {
@@ -223,12 +225,12 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
         }
         tags.add(tag);
         const effort = a.effort === undefined ? undefined : str(a, 'effort', `agents.${name}`);
-        if (effort !== undefined && (harness !== 'claude' || !efforts.includes(effort))) {
-            throw new Error(`agents.${name}.effort is for claude agents: ${efforts.join(', ')}`);
+        if (effort !== undefined && (!['claude', 'codex'].includes(harness) || !(harness === 'codex' ? ['minimal', 'low', 'medium', 'high', 'xhigh'] : efforts).includes(effort))) {
+            throw new Error(`agents.${name}.effort is invalid for this harness; claude supports: ${efforts.join(', ')}`);
         }
         const variant = a.variant === undefined ? undefined : str(a, 'variant', `agents.${name}`);
         if (variant !== undefined && harness !== 'opencode') {
-            throw new Error(`agents.${name}.variant is for opencode agents (claude agents use effort)`);
+            throw new Error(`agents.${name}.variant is for opencode agents (claude and codex agents use effort)`);
         }
         const mode = a.permission_mode === undefined ? undefined : str(a, 'permission_mode', `agents.${name}`);
         if (mode !== undefined && (harness !== 'claude' || !permissionModes.includes(mode))) {
@@ -282,11 +284,21 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
     };
 
     const commands: ProjectCommand[] = [];
-    for (const [name, raw] of Object.entries(table(t.commands, 'commands'))) {
-        const what = `commands.${name}`;
+    const taken = new Set<string>();
+    const claim = (name: string, what: string) => {
         if (!/^[a-z][a-z0-9_]*$/.test(name) || builtinCommands.includes(name)) {
             throw new Error(`${what}: the name must be lowercase a-z, 0-9, _ and not a built-in command`);
         }
+        if (taken.has(name)) {
+            throw new Error(`${what}: /${name} is already taken by another command`);
+        }
+        taken.add(name);
+    };
+    for (const name of Object.keys(table(t.commands, 'commands'))) {
+        claim(name, `commands.${name}`);
+    }
+    for (const [name, raw] of Object.entries(table(t.commands, 'commands'))) {
+        const what = `commands.${name}`;
         const c = table(raw, what);
         const flag = (key: string, fallback: boolean) => {
             if (c[key] !== undefined && typeof c[key] !== 'boolean') {
@@ -306,6 +318,10 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
         if (ready && !background) {
             throw new Error(`${what}.ready only applies to background commands`);
         }
+        const aliases = c.aliases === undefined ? [] : strList(c, 'aliases', what);
+        for (const alias of aliases) {
+            claim(alias, `${what}.aliases`);
+        }
         commands.push({
             name,
             cmd: str(c, 'cmd', what),
@@ -313,6 +329,7 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
             confirm: flag('confirm', false),
             background,
             ready,
+            aliases,
         });
     }
 

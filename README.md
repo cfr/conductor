@@ -95,8 +95,9 @@ the task, `/stop plan` interrupts it) and survives `/next`.
 Project commands come from `[commands.<name>]` in `CONDUCTOR.toml` (`cmd`, `description`,
 `confirm` for a yes/no button first, `background` for long-running ones, `ready` a regular
 expression: a background command reports its output from the first matching line, e.g. its URL,
-instead of a snapshot five seconds after the start). Text after the command
-is appended to `cmd`. A one-shot command reports its exit status and output tail (full log
+instead of a snapshot five seconds after the start, `aliases` other names it answers to, such as
+`["server"]` for `serve`, left out of the command menu). Text after the command is appended to
+`cmd`. A one-shot command reports its exit status and output tail (full log
 attached when long) and waits for no agent turn or gate to be running; a background one starts
 with `/<name>`, shows its status when sent again and stops with `/<name> stop` (the whole process
 group). The conductor stops its background commands when it exits (Ctrl-C, SIGTERM, a closed
@@ -135,3 +136,27 @@ Known gaps:
 - the planning session's "PLAN.md only" rule is checked after each turn, not enforced (its
   read-only turns while a task runs are)
 - tool outputs in logs are not shortened
+
+A feedback reply without `VERDICT: clean` or `VERDICT: findings` gets one automatic follow-up
+in the same checker session asking for the complete report. This does not consume another
+feedback round. If the follow-up still has no verdict, the task flow pauses without sending
+anything to the implementer or starting review. Use `/continue feedback` to finish the report,
+`/feedback <agent>` for another check, or `/review` to proceed to review. The automatic retry
+budget survives conductor restarts.
+
+## Codex
+
+Install the Codex CLI and run `codex login` as the user running conductor. Add an
+`[agents.codex]` entry to the project's `CONDUCTOR.toml` (see the example), then use
+`/next codex`, `/review codex`, `/chat codex <message>` or select it in `[roles]`.
+Set `model` to a model available to your account; optional `effort` accepts
+`minimal`, `low`, `medium`, `high`, or `xhigh` when supported by that model.
+
+The adapter uses `codex exec --json` and resumes the same Codex thread on later turns.
+Bridge transcripts and thread mappings persist beside the state file in `codex/`;
+normal `wlog/` exports include messages, tools and per-turn token totals. Read-only
+turns use the read-only sandbox; other turns use workspace-write. CLI exec cannot
+relay interactive permission prompts: approvals are disabled and operations needing
+escalation are denied. Questions in replies can be answered with the next message.
+After a conductor restart, an unfinished turn is marked interrupted; `/continue`
+resumes its thread. Codex background-job notifications are not supported.
