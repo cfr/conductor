@@ -434,19 +434,38 @@ export class Conductor {
         return undefined;
     }
 
-    private async afterImplementGate() {
+    // the agent of the next round in roles.feedback, the last one repeating
+    private nextFeedbackAgent(): string | undefined {
+        const list = this.project.roles.feedback;
         const done = this.state.feedbackRound ?? 0;
-        if (this.project.roles.feedback && done < this.project.feedbackRounds) {
-            await this.runFeedback(this.project.roles.feedback);
+        return done < this.project.feedbackRounds ? list[Math.min(done, list.length - 1)] : undefined;
+    }
+
+    private async afterImplementGate() {
+        const next = this.nextFeedbackAgent();
+        if (next) {
+            await this.runFeedback(next);
         } else {
             await this.startReview(this.project.roles.review);
         }
     }
 
+    // Nothing to recheck: a further round only runs when another agent checks afresh.
+    private async afterSettledCheck(why: string) {
+        const next = this.nextFeedbackAgent();
+        if (next && next !== this.state.sessions.feedback?.agent) {
+            await this.chat.send(`${why}; next check by ${this.agent(next).tag}`);
+            await this.runFeedback(next);
+            return;
+        }
+        await this.chat.send(`${why}; on to the review`);
+        await this.startReview(this.project.roles.review);
+    }
+
     private async feedbackCommand(args: string) {
         this.reload();
         const { agent } = this.parseArgs(args);
-        const name = agent ?? this.project.roles.feedback;
+        const name = agent ?? this.nextFeedbackAgent() ?? this.project.roles.feedback.at(-1);
         if (!name) {
             await this.chat.send('no feedback agent: set roles.feedback in CONDUCTOR.toml, or /feedback <agent>');
             return;
@@ -488,8 +507,7 @@ export class Conductor {
         const task = this.state.task!;
         const verdict = [...report.matchAll(/^\W*VERDICT:\W*(clean|findings)\b/gim)].pop()?.[1].toLowerCase();
         if (verdict === 'clean') {
-            await this.chat.send(`feedback: ${task.id} is clean; on to the review`);
-            await this.startReview(this.project.roles.review);
+            await this.afterSettledCheck(`feedback: ${task.id} is clean`);
             return;
         }
         if (!verdict) {
@@ -936,8 +954,7 @@ export class Conductor {
         if (role === 'implement' && this.state.feedbackFixing && r.outcome === 'succeeded') {
             this.state.feedbackFixing = undefined;
             this.store.save();
-            await this.chat.send('the implementer changed nothing for the feedback; on to the review');
-            await this.startReview(this.project.roles.review);
+            await this.afterSettledCheck('the implementer changed nothing for the feedback');
         }
     }
 

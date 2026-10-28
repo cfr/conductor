@@ -10,7 +10,8 @@ test = "ctest --preset desktop"
 
 [roles]
 implement = "glm"
-feedback = "dsf"
+# one agent or a list: round n of the feedback checks goes to the nth, the last one repeating
+feedback = ["dsf", "glm"]
 review = "opus"
 plan = "opus"
 
@@ -39,8 +40,9 @@ effort = "medium"
 tag = "opus55"
 
 [flow]
-# feedback checks (roles.feedback reports, the implementer fixes) before the review; 0 skips them
-feedback_rounds = 2
+# feedback checks (roles.feedback reports, the implementer fixes) before the review; defaults to
+# the length of roles.feedback, 0 skips them
+feedback_rounds = 3
 
 [logs]
 dir = "wlog"

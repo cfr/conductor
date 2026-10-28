@@ -99,3 +99,16 @@ test('feedback rounds need a feedback agent and default to one', () => {
     assert.throws(() => parseProjectConfig('/r', `${withFeedback}\n[flow]\nfeedback_rounds = -1`), /whole number/);
     assert.throws(() => parseProjectConfig('/r', base.replace('plan = "opus"', 'plan = "opus"\nfeedback = "x"')), /unknown agent/);
 });
+
+test('feedback takes a list of agents, one round each by default', () => {
+    const list = (v: string) => base.replace('plan = "opus"', `plan = "opus"\nfeedback = ${v}`);
+    assert.deepEqual(parseProjectConfig('/r', base).roles.feedback, []);
+    assert.deepEqual(parseProjectConfig('/r', list('"glm"')).roles.feedback, ['glm']);
+    const two = parseProjectConfig('/r', list('["glm", "opus"]'));
+    assert.deepEqual(two.roles.feedback, ['glm', 'opus']);
+    assert.equal(two.feedbackRounds, 2);
+    assert.equal(parseProjectConfig('/r', `${list('["glm", "opus"]')}\n[flow]\nfeedback_rounds = 3`).feedbackRounds, 3);
+    assert.throws(() => parseProjectConfig('/r', list('[]')), /non-empty list/);
+    assert.throws(() => parseProjectConfig('/r', list('["glm", 3]')), /non-empty list/);
+    assert.throws(() => parseProjectConfig('/r', list('["glm", "x"]')), /unknown agent "x"/);
+});

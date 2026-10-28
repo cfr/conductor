@@ -61,8 +61,8 @@ export interface ProjectConfig {
     root: string;
     logDir: string;
     gate: GateStep[];
-    roles: Record<Exclude<Role, 'feedback'> | 'chat' | 'summary', string> & { feedback?: string };
-    // checks by roles.feedback before the review; 0 skips them
+    roles: Record<Exclude<Role, 'feedback'> | 'chat' | 'summary', string> & { feedback: string[] };
+    // checks before the review, round n by roles.feedback[n - 1] (the last one repeats); 0 skips them
     feedbackRounds: number;
     agents: Map<string, AgentConfig>;
     prompts: Prompts;
@@ -158,6 +158,18 @@ function str(t: Table, key: string, what: string, fallback?: string): string {
     return v;
 }
 
+// one name or a non-empty list of them
+function strList(t: Table, key: string, what: string): string[] {
+    const v = t[key];
+    if (typeof v === 'string') {
+        return [str(t, key, what)];
+    }
+    if (!Array.isArray(v) || v.length === 0 || v.some((x) => typeof x !== 'string' || x === '')) {
+        throw new Error(`${what}.${key} must be a name or a non-empty list of names`);
+    }
+    return v as string[];
+}
+
 export function loadLocalConfig(file: string): LocalConfig {
     const t = parse(readFileSync(file, 'utf8')) as Table;
     const base = dirname(file);
@@ -238,12 +250,15 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
     }
     roles.chat = r.chat === undefined ? roles.plan : str(r, 'chat', 'roles');
     roles.summary = r.summary === undefined ? roles.chat : str(r, 'summary', 'roles');
-    if (r.feedback !== undefined) {
-        roles.feedback = str(r, 'feedback', 'roles');
-    }
-    for (const role of ['chat', 'summary', 'feedback'] as const) {
-        if (roles[role] !== undefined && !agents.has(roles[role])) {
+    roles.feedback = r.feedback === undefined ? [] : strList(r, 'feedback', 'roles');
+    for (const role of ['chat', 'summary'] as const) {
+        if (!agents.has(roles[role])) {
             throw new Error(`roles.${role} names unknown agent "${roles[role]}"`);
+        }
+    }
+    for (const name of roles.feedback) {
+        if (!agents.has(name)) {
+            throw new Error(`roles.feedback names unknown agent "${name}"`);
         }
     }
 
@@ -303,13 +318,13 @@ export function parseProjectConfig(root: string, toml: string): ProjectConfig {
 
     const logDir = resolve(root, str(table(t.logs, 'logs'), 'dir', 'logs', 'wlog'));
     const flow = table(t.flow, 'flow');
-    let feedbackRounds = roles.feedback === undefined ? 0 : 1;
+    let feedbackRounds = roles.feedback.length;
     if (flow.feedback_rounds !== undefined) {
         const n = flow.feedback_rounds;
         if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) {
             throw new Error('flow.feedback_rounds must be a whole number, 0 or more');
         }
-        if (n > 0 && roles.feedback === undefined) {
+        if (n > 0 && roles.feedback.length === 0) {
             throw new Error('flow.feedback_rounds needs roles.feedback');
         }
         feedbackRounds = n;

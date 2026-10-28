@@ -90,15 +90,17 @@ The same loop as today, one command per step, with the bridge doing the bookkeep
    - Gate passes: the bridge posts the commit title and body, the diff stat, the gate outcome
      and the agent's final message, with the full diff attached as a file, and goes on to the
      feedback check (when configured) or straight to step 3.
-   - Feedback (`roles.feedback`, up to `[flow] feedback_rounds` times, default 1 when the role is
-     set, 0 to skip): a cheaper agent checks the commits against a checklist (plan steps and
-     their evidence, stale or rule-breaking comments, unsupported CHANGELOG claims, formatting
-     and tests, provable bugs) and only reports, ending with `VERDICT: clean` or `VERDICT:
-     findings`. Findings go to the implementing session, which fixes what holds, rejects the
-     rest with a reason and commits; the gate runs and the next round checks the answer in the
-     same feedback session. A clean verdict, an answer without commits or the last round leads
-     to step 3. Mechanical misses get fixed before the expensive review, and the code stays the
-     implementer's: the checker never edits. `/feedback [agent]` runs one more round by hand.
+   - Feedback (`roles.feedback`, one agent or a list, up to `[flow] feedback_rounds` times, default
+     one per listed agent, 0 to skip): a cheaper agent checks the commits against a checklist (plan
+     steps and their evidence, stale or rule-breaking comments, unsupported CHANGELOG claims,
+     formatting and tests, provable bugs) and only reports, ending with `VERDICT: clean` or
+     `VERDICT: findings`. Findings go to the implementing session, which fixes what holds, rejects
+     the rest with a reason and commits; the gate runs and the next round checks the answer in the
+     same feedback session, or, when the list names another agent for it, starts a fresh check with
+     that agent. A clean verdict or an answer without commits moves on to the next listed agent, and
+     to step 3 when none is left; so does the last round. Mechanical misses get fixed before the
+     expensive review, and the code stays the implementer's: the checker never edits. `/feedback
+     [agent]` runs one more round by hand.
 3. Auto-review: the bridge starts a review session (`roles.review`) with `please review <id>`
    (the same context `AGENTS.md` gives an interactive session) and posts the findings.
    Reviewing does not touch the tree, so it needs no confirmation. `/review [agent]` starts or
