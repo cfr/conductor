@@ -67,9 +67,10 @@ class CodexSession implements AgentSession {
         const answer: Message = { role: 'assistant', parts: [] };
         this.saved.transcript.messages.push(answer);
         this.persist();
-        // exec cannot ask for approvals. Keep sandboxing enabled and fail denied operations.
+        // Git metadata is protected even in workspace-write; route escalations to auto-review.
         // Config overrides also apply to resume, whose subcommand lacks --sandbox.
-        const args = ['exec', '-c', 'approval_policy="never"', '-c',
+        const args = ['exec', '-c', `approval_policy="${this.opts.readOnly ? 'never' : 'on-request'}"`, '-c',
+            'approvals_reviewer="auto_review"', '-c',
             `sandbox_mode="${this.opts.readOnly ? 'read-only' : 'workspace-write'}"`,
             '--model', this.agent.model, '--json'];
         if (this.agent.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(this.agent.effort)}`);

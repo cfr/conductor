@@ -274,5 +274,6 @@ None right now.
 
 Codex uses `codex exec --json`, persists its thread id and event transcript beside conductor state,
 and uses `exec resume` for follow-up turns. Sandbox policy is set on every turn (read-only or
-workspace-write). Exec approvals are disabled; denied escalations cannot be approved from Telegram.
+workspace-write). Writable turns route on-request approvals through Codex auto-review so Git
+operations can be approved; read-only turns deny escalations. Exec cannot relay approvals to Telegram.
 See README "Codex" for setup and lifecycle limits.

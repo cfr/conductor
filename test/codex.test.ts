@@ -23,6 +23,11 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"test-thread"}' '{"type":"i
         const session = await adapter.create(agent, opts);
         const result = await session.send('hello');
         assert.equal(result.outcome, 'succeeded', result.error ?? '');
+        const initialArgs = readFileSync(join(dir, 'args.txt'), 'utf8').trimEnd().split('\n');
+        assert.ok(initialArgs.includes('sandbox_mode="workspace-write"'));
+        assert.ok(initialArgs.includes('approval_policy="on-request"'));
+        assert.ok(initialArgs.includes('approvals_reviewer="auto_review"'));
+        assert.ok(!initialArgs.includes('--dangerously-bypass-approvals-and-sandbox'));
         const transcript = await session.transcript();
         assert.equal(transcript?.messages[1].usage?.input, 60);
         assert.equal(transcript?.messages[1].usage?.cacheRead, 40);
@@ -35,7 +40,14 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"test-thread"}' '{"type":"i
         assert.ok(args.includes('sandbox_mode="read-only"'));
         assert.ok(args.includes('approval_policy="never"'));
         assert.deepEqual(args.slice(-3), ['resume', 'test-thread', '-']);
-        assert.equal((await resumed.transcript())?.messages.length, 4);
+        await resumed.setReadOnly(false);
+        assert.equal((await resumed.send('commit the changes')).outcome, 'succeeded');
+        const writableArgs = readFileSync(join(dir, 'args.txt'), 'utf8').trimEnd().split('\n');
+        assert.ok(writableArgs.includes('approval_policy="on-request"'));
+        assert.ok(writableArgs.includes('approvals_reviewer="auto_review"'));
+        assert.ok(writableArgs.includes('sandbox_mode="workspace-write"'));
+        assert.deepEqual(writableArgs.slice(-3), ['resume', 'test-thread', '-']);
+        assert.equal((await resumed.transcript())?.messages.length, 6);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -155,8 +155,9 @@ Set `model` to a model available to your account; optional `effort` accepts
 The adapter uses `codex exec --json` and resumes the same Codex thread on later turns.
 Bridge transcripts and thread mappings persist beside the state file in `codex/`;
 normal `wlog/` exports include messages, tools and per-turn token totals. Read-only
-turns use the read-only sandbox; other turns use workspace-write. CLI exec cannot
-relay interactive permission prompts: approvals are disabled and operations needing
-escalation are denied. Questions in replies can be answered with the next message.
+turns use the read-only sandbox with escalations denied. Writable turns use workspace-write
+with on-request approvals routed to Codex auto-review, allowing approved Git operations on the
+protected `.git` directory. Denied operations remain blocked. CLI exec cannot relay interactive
+permission prompts to Telegram. Questions in replies can be answered with the next message.
 After a conductor restart, an unfinished turn is marked interrupted; `/continue`
 resumes its thread. Codex background-job notifications are not supported.
