@@ -52,6 +52,7 @@ interface Pending {
     id: number;
     choices: string[];
     allowText: boolean;
+    messageId?: number;
     resolve(answer: string): void;
 }
 
@@ -128,6 +129,9 @@ export class Chat implements Messenger {
             const route = reply === undefined ? undefined : this.routes.get(reply);
             const waiting = this.pending.find((p) => p.allowText);
             if (waiting && route === undefined) {
+                if (waiting.messageId !== undefined) {
+                    this.bot.api.editMessageReplyMarkup(this.userId, waiting.messageId).catch(() => {});
+                }
                 this.settle(waiting, text);
                 return;
             }
@@ -281,6 +285,9 @@ export class Chat implements Messenger {
             const hint = allowText ? '\n\n(or answer in text)' : '';
             this.bot.api
                 .sendMessage(this.userId, chunk(text + hint)[0], { reply_markup: kb })
+                .then((msg) => {
+                    p.messageId = msg.message_id;
+                })
                 .catch((e: Error) => console.error('ask:', e.message));
         });
     }

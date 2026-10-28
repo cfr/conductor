@@ -259,7 +259,12 @@ export class Conductor {
                         lines.push(`${i === 0 ? '\n' : ''}${c.label}: ${c.description}`);
                     }
                 });
-                return this.chat.ask(lines.join('\n'), q.choices.map((c) => c.label), q.allowText);
+                const labels = q.choices.map((c) => c.label);
+                const a = await this.chat.ask(lines.join('\n'), labels, q.allowText);
+                if (!labels.includes(a)) {
+                    await this.chat.send(`${this.prefix(role)} working…`, role);
+                }
+                return a;
             },
         };
     }
