@@ -1,4 +1,4 @@
-import type { Message, Part, Transcript } from './markdown.ts';
+import { addStep, emptyUsage, type Message, type Part, type Transcript } from './markdown.ts';
 
 interface OcContent {
     type: string;
@@ -16,6 +16,7 @@ interface OcMessage {
     type: string;
     text?: string;
     content?: OcContent[];
+    tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
 }
 
 export interface OcExport {
@@ -36,8 +37,11 @@ function toolOutput(c: OcContent): string {
 
 export function fromOpencode(data: OcExport): Transcript {
     const messages: Message[] = [];
+    let compactions = 0;
     for (const m of data.messages) {
-        if (m.type === 'user') {
+        if (m.type === 'compaction') {
+            compactions++;
+        } else if (m.type === 'user') {
             messages.push({ role: 'user', parts: [{ kind: 'text', text: m.text ?? '' }] });
         } else if (m.type === 'assistant') {
             const parts: Part[] = [];
@@ -55,7 +59,19 @@ export function fromOpencode(data: OcExport): Transcript {
                     });
                 }
             }
-            messages.push({ role: 'assistant', parts });
+            const usage = emptyUsage();
+            usage.compactions = compactions;
+            compactions = 0;
+            const t = m.tokens;
+            if (t) {
+                addStep(usage, {
+                    input: t.input ?? 0,
+                    output: (t.output ?? 0) + (t.reasoning ?? 0),
+                    cacheRead: t.cache?.read ?? 0,
+                    cacheWrite: t.cache?.write ?? 0,
+                });
+            }
+            messages.push({ role: 'assistant', parts, usage });
         }
     }
     return {

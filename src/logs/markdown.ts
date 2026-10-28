@@ -3,9 +3,29 @@ export type Part =
     | { kind: 'text'; text: string }
     | { kind: 'tool'; name: string; input: unknown; output: string };
 
+export interface Usage {
+    steps: number;
+    input: number;
+    // reasoning included
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    // the largest prompt one step sent: input plus cache reads and writes
+    maxContext: number;
+    compactions: number;
+}
+
+export interface Step {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+}
+
 export interface Message {
     role: 'user' | 'assistant';
     parts: Part[];
+    usage?: Usage;
 }
 
 export interface Transcript {
@@ -14,6 +34,66 @@ export interface Transcript {
     created: number;
     updated: number;
     messages: Message[];
+}
+
+export function emptyUsage(): Usage {
+    return { steps: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, maxContext: 0, compactions: 0 };
+}
+
+export function addStep(u: Usage, s: Step) {
+    u.steps++;
+    u.input += s.input;
+    u.output += s.output;
+    u.cacheRead += s.cacheRead;
+    u.cacheWrite += s.cacheWrite;
+    u.maxContext = Math.max(u.maxContext, s.input + s.cacheRead + s.cacheWrite);
+}
+
+function addUsage(to: Usage, u: Usage) {
+    to.steps += u.steps;
+    to.input += u.input;
+    to.output += u.output;
+    to.cacheRead += u.cacheRead;
+    to.cacheWrite += u.cacheWrite;
+    to.maxContext = Math.max(to.maxContext, u.maxContext);
+    to.compactions += u.compactions;
+}
+
+function count(n: number): string {
+    if (n >= 1e6) {
+        return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
+    }
+    return n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+}
+
+export function formatUsage(u: Usage): string {
+    const parts = [
+        `${u.steps} step${u.steps === 1 ? '' : 's'}`,
+        `input ${count(u.input)}`,
+        `output ${count(u.output)}`,
+        `cache read ${count(u.cacheRead)}`,
+        `cache write ${count(u.cacheWrite)}`,
+        `max context ${count(u.maxContext)}`,
+    ];
+    if (u.compactions) {
+        parts.push(`${u.compactions} compaction${u.compactions === 1 ? '' : 's'}`);
+    }
+    return parts.join(' · ');
+}
+
+// one entry per user message: the usage of the assistant messages answering it
+function turnUsage(messages: Message[]): Map<Message, Usage> {
+    const turns = new Map<Message, Usage>();
+    let turn: Usage | undefined;
+    for (const m of messages) {
+        if (m.role === 'user') {
+            turn = emptyUsage();
+            turns.set(m, turn);
+        } else if (m.usage && turn) {
+            addUsage(turn, m.usage);
+        }
+    }
+    return turns;
 }
 
 function stamp(ms: number): string {
@@ -32,19 +112,32 @@ function clip(text: string, maxLines: number): string {
 }
 
 export function renderMarkdown(t: Transcript, maxToolOutputLines = 0): string {
+    const total = emptyUsage();
+    for (const m of t.messages) {
+        if (m.usage) {
+            addUsage(total, m.usage);
+        }
+    }
+    const metered = total.steps > 0 || total.compactions > 0;
     const out: string[] = [
         `# ${t.title}`,
         '',
         `**Session ID:** ${t.id}`,
         `**Created:** ${stamp(t.created)}`,
         `**Updated:** ${stamp(t.updated)}`,
+        ...(metered ? [`**Tokens:** ${formatUsage(total)}`] : []),
         '',
         '---',
         '',
     ];
+    const turns = metered ? turnUsage(t.messages) : new Map<Message, Usage>();
     const sections: string[][] = [];
     for (const m of t.messages) {
         const body: string[] = [];
+        const turn = turns.get(m);
+        if (turn) {
+            body.push(`**Turn tokens:** ${formatUsage(turn)}`, '');
+        }
         for (const p of m.parts) {
             if (p.kind === 'thinking') {
                 if (p.text.trim()) {

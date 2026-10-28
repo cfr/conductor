@@ -164,9 +164,9 @@ produces today (the renderer reproduces `0047-sand-pits-glm53.md` byte for byte 
 export):
 
     # <session title>
-    **Session ID:** ... **Created:** ... **Updated:** ...
+    **Session ID:** ... **Created:** ... **Updated:** ... **Tokens:** ...
     ## User / ## Assistant blocks, _Thinking:_, **Tool: <name>** with **Input:** (json)
-    and the tool output
+    and the tool output; each ## User starts with its turn's **Turn tokens:**
 
 - opencode: `opencode session export <id>` (or the server's export endpoint) gives the full
   session as JSON; the renderer turns it into the format above, so GLM logs look as they do now.

@@ -113,7 +113,9 @@ Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-feedback-
 `<task-id>-review[-plan]-<tag>.md`, `<task-id>-chat-<tag>.md` and `<task-id>-plan-<tag>.md` (named
 after the task current when `/plan` opened it; `plan-<date>-<topic>-<tag>.md` with none), in
 opencode's `/export` layout for both harnesses. A new chat or planning session whose log name is
-taken gets a `-2`, `-3`, ... suffix.
+taken gets a `-2`, `-3`, ... suffix. The header carries a `**Tokens:**` line for the session and
+each user turn a `**Turn tokens:**` line (steps, input, output with reasoning, cache reads and
+writes, the largest context one step sent, compactions), so token use survives the sessions.
 
 ## Checks
 

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { Message, Part, Transcript } from './markdown.ts';
+import { addStep, emptyUsage, type Message, type Part, type Step, type Transcript } from './markdown.ts';
 
 interface Block {
     type: string;
@@ -15,13 +15,21 @@ interface Block {
     is_error?: boolean;
 }
 
+interface ApiUsage {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+}
+
 interface Entry {
     type: string;
+    subtype?: string;
     isMeta?: boolean;
     isSidechain?: boolean;
     timestamp?: string;
     customTitle?: string;
-    message?: { id?: string; content?: string | Block[] };
+    message?: { id?: string; content?: string | Block[]; usage?: ApiUsage };
 }
 
 const harnessText = /^\s*<(task-notification|command-|local-command|system-reminder)/;
@@ -77,9 +85,15 @@ export function fromClaudeJsonl(sessionId: string, jsonl: string): Transcript {
     const times: number[] = [];
     const messages: Message[] = [];
     let current: Message | null = null;
+    // an API message spans several entries, one per content block, each repeating its usage
+    const steps = new Map<Message, Map<string, Step>>();
+    let compactions = 0;
     for (const e of entries) {
         if (e.type === 'custom-title' && e.customTitle) {
             title = e.customTitle;
+        }
+        if (e.type === 'system' && e.subtype === 'compact_boundary') {
+            compactions++;
         }
         if ((e.type !== 'user' && e.type !== 'assistant') || e.isMeta || e.isSidechain) {
             continue;
@@ -103,8 +117,20 @@ export function fromClaudeJsonl(sessionId: string, jsonl: string): Transcript {
             continue;
         }
         if (!current) {
-            current = { role: 'assistant', parts: [] };
+            current = { role: 'assistant', parts: [], usage: emptyUsage() };
+            current.usage!.compactions = compactions;
+            compactions = 0;
             messages.push(current);
+            steps.set(current, new Map());
+        }
+        const u = e.message?.usage;
+        if (u && e.message?.id) {
+            steps.get(current)!.set(e.message.id, {
+                input: u.input_tokens ?? 0,
+                output: u.output_tokens ?? 0,
+                cacheRead: u.cache_read_input_tokens ?? 0,
+                cacheWrite: u.cache_creation_input_tokens ?? 0,
+            });
         }
         for (const b of Array.isArray(c) ? c : []) {
             let part: Part | null = null;
@@ -119,6 +145,11 @@ export function fromClaudeJsonl(sessionId: string, jsonl: string): Transcript {
             if (part) {
                 current.parts.push(part);
             }
+        }
+    }
+    for (const [m, byId] of steps) {
+        for (const s of byId.values()) {
+            addStep(m.usage!, s);
         }
     }
     return {
