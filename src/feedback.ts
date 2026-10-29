@@ -66,6 +66,12 @@ export class FeedbackTracker {
                   : 'SHA, worktree, or gate commands differ/are unknown; do not assume it covers this tree.'}`
             : 'No conductor gate result recorded.';
         const extra = [text, '\nValidation and verification ownership:', validationGuidance, `Conductor gate: ${gateText}`];
+        if (role === 'implement') {
+            extra.push('Before the first implementation commit, identify the modes and lifecycle transitions ' +
+                'affected by the change. Test their meaningful combinations through the real caller/entry ' +
+                'path, including recovery and intentional-exit behavior where relevant. Briefly report ' +
+                'the combinations checked and any coverage limitations.');
+        }
         if (role === 'feedback' || role === 'review') {
             extra.push(`Current SHA: ${sha}`, `Previous feedback findings and dispositions:\n${this.summary()}`);
             state.sessions[role]!.reportSha = sha;

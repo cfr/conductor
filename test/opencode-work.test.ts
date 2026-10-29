@@ -23,10 +23,17 @@ function fixture(saved?: PendingWorkState) {
     let stored: PendingWorkState | undefined;
     let hook: ((path: string) => void) | undefined;
     const requests: string[] = [];
-    const api: WorkApi = async <T>(_method: string, path: string): Promise<T> => {
+    const removed: string[] = [];
+    const api: WorkApi = async <T>(method: string, path: string): Promise<T> => {
         requests.push(path);
         hook?.(path);
         if (fail && path.includes(fail)) throw new Error('service unavailable');
+        if (method === 'DELETE' && path.startsWith('/api/shell/')) {
+            const id = new URL(path, 'http://test').pathname.split('/').at(-1)!;
+            removed.push(id);
+            shells = shells.filter((s) => (s as { id: string }).id !== id);
+            return undefined as T;
+        }
         if (path === '/api/session/active') return { data: structuredClone(active) } as T;
         if (path.startsWith('/api/shell?')) return { data: shells } as T;
         const u = new URL(path, 'http://test');
@@ -43,7 +50,7 @@ function fixture(saved?: PendingWorkState) {
         return { data: structuredClone(s.info) } as T;
     };
     const work = new OpencodeWork(api, 'root', '/repo', saved, (state) => { stored = structuredClone(state); });
-    return { work, sessions, api, requests, saved: () => stored!, setActive(v: Record<string, object>) { active = v; },
+    return { work, sessions, api, requests, removed, saved: () => stored!, setActive(v: Record<string, object>) { active = v; },
         setShells(v: object[]) { shells = v; }, fail(path: string) { fail = path; }, hook(fn: (path: string) => void) { hook = fn; },
         finishChild() { sessions.child.info = { id: 'child', outcome: 'succeeded', time: { updated: 124, idle: 125 } }; active = {}; },
         consume() {
@@ -159,4 +166,33 @@ test('unknown subagent metadata cannot be treated as no pending work', async () 
     const f = fixture();
     f.sessions.root.assistant = [assistant('m1', 100, [{ type: 'tool', name: 'subagent', id: 't', state: { status: 'completed' } }])];
     await assert.rejects(f.work.pending(), /status is unknown/);
+});
+
+test('stop removes only root and discovered descendant shell jobs in the project location', async () => {
+    const f = fixture();
+    f.setShells([
+        { id: 'root-job', status: 'running', command: 'Xvfb', metadata: { sessionID: 'root' } },
+        { id: 'child-job', status: 'running', command: 'client', metadata: { sessionID: 'child' } },
+        { id: 'other-job', status: 'running', command: 'server', metadata: { sessionID: 'other' } },
+        { id: 'unowned-job', status: 'running', command: 'server' },
+    ]);
+    await f.work.interrupt();
+    assert.deepEqual(f.removed.sort(), ['child-job', 'root-job']);
+    assert.equal(f.requests[0], '/api/session/root/interrupt');
+    assert.equal(f.requests.at(-1), '/api/session/root/interrupt');
+    assert.ok(f.requests.filter((p) => p.startsWith('/api/shell/')).every((p) => p.includes('location%5Bdirectory%5D=%2Frepo')));
+    assert.equal((await f.work.pending()).some((p) => p.kind === 'shell'), false);
+});
+
+test('stop attempts the remaining jobs and reports a cleanup failure', async () => {
+    const f = fixture();
+    f.setShells([
+        { id: 'root-job', status: 'running', command: 'Xvfb', metadata: { sessionID: 'root' } },
+        { id: 'child-job', status: 'running', command: 'client', metadata: { sessionID: 'child' } },
+    ]);
+    f.fail('/api/shell/root-job?');
+    await assert.rejects(f.work.interrupt(), /Could not stop owned shell jobs/);
+    assert.deepEqual(f.removed, ['child-job']);
+    assert.equal(f.requests.at(-1), '/api/session/root/interrupt');
+    assert.ok((await f.work.pending()).some((p) => p.id === 'root-job'));
 });

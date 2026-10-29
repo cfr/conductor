@@ -301,7 +301,7 @@ class OpencodeSession implements AgentSession {
     }
 
     async interrupt(): Promise<void> {
-        await this.oc.api('POST', `/api/session/${this.id}/interrupt`);
+        await this.work.interrupt();
     }
 
     async setReadOnly(on: boolean): Promise<void> {

@@ -191,6 +191,11 @@ The gate, a new task, and another feedback/review session cannot start while thi
 prompts. Failed status lookups hold the workflow as unknown; they never imply that work finished.
 `/continue <role>` can send instructions to the same waiting session.
 
+`/stop` also reaches an idle agent waiting on background work. For opencode it interrupts the
+parent, terminates its owned shell jobs (including jobs from discovered descendants), then
+interrupts again in case cleanup woke the parent. Unrelated jobs are left alone. Remaining
+subagents or queued work still hold the barrier; stopping does not automatically advance the task.
+
 Child IDs, message cursors, and waiting turns persist in state. Startup also rediscovers work
 from opencode's durable transcript. If an unexpected writer resume overlaps another phase,
 automation pauses. After pending work settles, `/gate` verifies the current tree and restarts

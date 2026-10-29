@@ -26,6 +26,7 @@ interface Harness {
     startReview(agent: string): Promise<void>;
     shutdown(): Promise<void>;
     announce(): Promise<void>;
+    stop(args?: string): Promise<void>;
     unsolicited(id: string, event: { phase: 'started' }): Promise<void>;
 }
 const feedback = (findings: unknown[], verifications: unknown[] = [], verdict = findings.length ? 'findings' : 'clean') =>
@@ -443,5 +444,32 @@ test('an overlapping writer resume pauses automatic flow until an explicit fresh
         await f.h.gateCommand();
         assert.equal(f.store.state.workConflict, undefined);
         assert.deepEqual(f.prompts.map((p) => p.agent), ['ds', 'glm', 'mm', 'sol']);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('stop reaches an idle session waiting on shell jobs and prevents automatic advancement', async () => {
+    const f = setup([feedback([])]);
+    const impl = f.h.live.get('implement')!;
+    let pending = true;
+    let interrupted = 0;
+    impl.pendingWork = async () => pending ? [{ kind: 'shell', id: 'job', description: 'Xvfb' }] : [];
+    impl.interrupt = async () => {
+        interrupted++;
+        pending = false;
+        await f.h.drainWork(); // Polling during cleanup must not start the gate.
+    };
+    try {
+        writeFileSync(join(f.project, 'code.txt'), 'implemented');
+        f.git('add', 'code.txt'); f.git('commit', '-qm', 'Implement');
+        await f.h.settle('implement', { outcome: 'succeeded', text: 'Finished' });
+        assert.equal(f.h.busy, null);
+        await f.h.stop();
+        assert.equal(interrupted, 1);
+        assert.equal(f.store.state.sessions.implement!.workWait!.result.outcome, 'interrupted');
+        await f.h.drainWork();
+        assert.equal(f.store.state.sessions.implement!.workWait, undefined);
+        assert.equal(existsSync(join(f.project, 'gate-count')), false);
+        assert.equal(f.prompts.length, 0);
+        assert.ok(f.sent.some((s) => s.includes('turn interrupted')));
     } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
 });

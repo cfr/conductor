@@ -220,6 +220,12 @@ metadata and inbox entries. Completion is acknowledged only after a new parent a
 request follows the notification and the parent becomes idle. Final active-session/inbox/time
 checks catch resumes racing the transcript reads.
 
+OpenCode interruption also removes shell jobs owned by the parent and discovered descendants in
+the project location, then interrupts the parent again to catch cleanup-triggered resumes.
+`/stop` targets a waiting session even without an active model turn. Polling pauses during stop
+cleanup, and interrupted waits cannot automatically advance after the jobs exit. Subagent and
+inbox checks still apply; cleanup does not infer completion from missing shell jobs alone.
+
 Discovered child IDs, tool IDs, notification receipts and scan cursors persist with the session.
 Conductor retains a waiting turn and its gate retry budget, serializes wakeups, and rechecks every
 two seconds without prompting the model. Status errors hold the barrier instead of implying idle.

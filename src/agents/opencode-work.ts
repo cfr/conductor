@@ -40,6 +40,33 @@ export class OpencodeWork {
         return this.checking;
     }
 
+    async interrupt(): Promise<void> {
+        const path = `/api/session/${encodeURIComponent(this.id)}/interrupt`;
+        await this.api('POST', path);
+        try {
+            await this.stopShells();
+        } finally {
+            // Job completion can wake the parent while cleanup is in progress.
+            await this.api('POST', path);
+        }
+    }
+
+    private async stopShells(): Promise<void> {
+        // Refresh ownership from structured subagent results before removing any jobs.
+        await this.pending();
+        const query = new URLSearchParams({ 'location[directory]': this.cwd });
+        const shells = await this.api<{ data: { id: string; metadata?: { sessionID?: string } }[] }>(
+            'GET', `/api/shell?${query}`,
+        );
+        if (!Array.isArray(shells.data)) throw new Error('opencode returned invalid shell status');
+        const owned = new Set([this.id, ...Object.keys(this.state.sessions)]);
+        const results = await Promise.allSettled(shells.data
+            .filter((s) => s.metadata?.sessionID && owned.has(s.metadata.sessionID))
+            .map((s) => this.api('DELETE', `/api/shell/${encodeURIComponent(s.id)}?${query}`)));
+        const failures = results.filter((r) => r.status === 'rejected');
+        if (failures.length) throw new AggregateError(failures.map((r) => r.reason), 'Could not stop owned shell jobs');
+    }
+
     private async messages(id: string, type: 'assistant' | 'synthetic', after?: string): Promise<Message[]> {
         const messages: Message[] = [];
         let cursor: string | undefined;

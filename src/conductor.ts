@@ -61,6 +61,7 @@ export class Conductor {
     private adapters: Record<AgentConfig['harness'], Adapter>;
     private live = new Map<SessionRole, AgentSession>();
     private busy: Busy = null;
+    private stoppingWork = 0;
     private chatBusy = false;
     // A planning turn while the task runs is read-only and takes no part in `busy`.
     private planBusy = false;
@@ -1310,7 +1311,7 @@ export class Conductor {
     }
 
     private async drainWork() {
-        if (this.drainingWork || this.recoveringWork || this.busy || this.planBusy) return;
+        if (this.drainingWork || this.recoveringWork || this.busy || this.planBusy || this.stoppingWork) return;
         const role = this.waitingRole();
         if (!role) {
             if (this.workPoll) clearInterval(this.workPoll);
@@ -1335,7 +1336,8 @@ export class Conductor {
                 }
                 return;
             }
-            const r: TurnResult = { outcome: st.outcome, error: st.error, text: await session.lastReply() };
+            const r: TurnResult = { outcome: wait.result.outcome === 'interrupted' ? 'interrupted' : st.outcome,
+                error: st.error, text: await session.lastReply() };
             const settled = await this.settle(role, r, wait.readOnly, r.text !== wait.result.text);
             this.busy = null;
             if (!settled.waiting) await this.afterTurn(role, r, settled.from, wait.gateAttempt);
@@ -1522,14 +1524,14 @@ export class Conductor {
     }
 
     private async stop(args = '') {
-        const busy = this.busy;
+        const busy = this.busy ?? this.waitingRole();
         if (this.chatBusy && (args === 'chat' || !busy)) {
-            await this.session('chat').interrupt();
+            await this.interruptSession('chat');
             await this.chat.send(`interrupt sent to ${this.prefix('chat')}`);
             return;
         }
         if (this.planBusy && (args === 'plan' || !busy || busy === 'plan')) {
-            await this.session('plan').interrupt();
+            await this.interruptSession('plan');
             await this.chat.send(`interrupt sent to ${this.prefix('plan')}`);
             return;
         }
@@ -1538,8 +1540,26 @@ export class Conductor {
             return;
         }
         const role = busy as Role;
-        await this.session(role).interrupt();
+        await this.interruptSession(role);
         await this.chat.send(`interrupt sent to ${this.prefix(role)}`);
+    }
+
+    private async interruptSession(role: SessionRole) {
+        this.stoppingWork++;
+        const markStopped = () => {
+            const wait = this.state.sessions[role]?.workWait;
+            if (wait) {
+                wait.result = { ...wait.result, outcome: 'interrupted' };
+                this.store.save();
+            }
+        };
+        markStopped();
+        try {
+            await this.session(role).interrupt();
+        } finally {
+            markStopped();
+            this.stoppingWork--;
+        }
     }
 
     private agentList(): string {
