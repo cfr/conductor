@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAdapter } from '../src/agents/codex.ts';
+import { renderMarkdown, usageMetadata } from '../src/logs/markdown.ts';
 import { parseProjectConfig } from '../src/config.ts';
 
 const agent = { name: 'codex', harness: 'codex' as const, model: 'test-model', tag: 'codex', effort: 'high' };
@@ -32,8 +33,24 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"test-thread"}' '{"type":"i
         assert.equal(transcript?.messages[1].usage?.input, 60);
         assert.equal(transcript?.messages[1].usage?.cacheRead, 40);
         assert.equal(transcript?.messages[1].parts[0].kind, 'tool');
+        assert.match(renderMarkdown(transcript!), /1 turn · model steps unavailable/);
+        assert.match(renderMarkdown(transcript!), /max context unavailable/);
+        const metadata = usageMetadata(transcript!) as { total: { input: number; steps: null; maxContext: null }; entries: { source: { raw: unknown } }[] };
+        assert.equal(metadata.total.input, 60);
+        assert.equal(metadata.total.steps, null);
+        assert.equal(metadata.total.maxContext, null);
+        assert.deepEqual(metadata.entries[0].source.raw, { input_tokens: 100, cached_input_tokens: 40, output_tokens: 20 });
+        // Old bridge state mislabeled turn totals as a single model step/context.
+        const savedFile = join(dir, 'sessions', `${session.id}.json`);
+        const old = JSON.parse(readFileSync(savedFile, 'utf8'));
+        old.transcript.messages[1].usage.steps = 1;
+        old.transcript.messages[1].usage.maxContext = 100;
+        delete old.transcript.messages[1].usageSource;
+        writeFileSync(savedFile, JSON.stringify(old));
         const resumed = adapter.resume(agent, session.id, opts);
         assert.equal(await resumed.lastReply(), 'Done');
+        assert.match(renderMarkdown((await resumed.transcript())!), /model steps unavailable/);
+        assert.match(renderMarkdown((await resumed.transcript())!), /max context unavailable/);
         await resumed.setReadOnly(true);
         assert.equal((await resumed.send('follow up')).outcome, 'succeeded');
         const args = readFileSync(join(dir, 'args.txt'), 'utf8').trimEnd().split('\n');
@@ -48,6 +65,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"test-thread"}' '{"type":"i
         assert.ok(writableArgs.includes('sandbox_mode="workspace-write"'));
         assert.deepEqual(writableArgs.slice(-3), ['resume', 'test-thread', '-']);
         assert.equal((await resumed.transcript())?.messages.length, 6);
+        assert.match(renderMarkdown((await resumed.transcript())!), /3 turns · model steps unavailable · input 180/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

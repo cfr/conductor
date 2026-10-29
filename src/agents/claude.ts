@@ -151,7 +151,7 @@ class ClaudeSession implements AgentSession {
         this.opts = { ...this.opts, readOnly: on };
     }
 
-    async backgroundJobs(): Promise<string[]> {
+    async pendingWork(): Promise<[]> {
         return [];
     }
 

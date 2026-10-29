@@ -1,5 +1,5 @@
 import type { GateStep } from './config.ts';
-import { git, shell } from './proc.ts';
+import { git, run, shell } from './proc.ts';
 
 export async function head(root: string): Promise<string> {
     return (await git(root, 'rev-parse', 'HEAD')).trim();
@@ -53,4 +53,10 @@ export async function runGate(root: string, steps: GateStep[]): Promise<GateResu
         }
     }
     return { ok: true, log, seconds: (Date.now() - started) / 1000 };
+}
+
+export async function isAncestor(root: string, ancestor: string, descendant: string): Promise<boolean> {
+    const r = await run('git', ['merge-base', '--is-ancestor', ancestor, descendant], root);
+    if (r.code > 1 || r.code < 0) throw new Error(r.output || 'could not check commit ancestry');
+    return r.code === 0;
 }

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import type { AgentConfig } from '../config.ts';
+import { OpencodeWork } from './opencode-work.ts';
 import { fromOpencode, type OcExport } from '../logs/opencode.ts';
 import type { Transcript } from '../logs/markdown.ts';
 import type { Adapter, AgentSession, Asker, SessionOptions, TurnResult, TurnState, UnsolicitedEvent } from './types.ts';
@@ -214,7 +215,7 @@ export class OpencodeAdapter implements Adapter {
     resume(agent: AgentConfig, id: string, opts: SessionOptions): AgentSession {
         this.ensureEvents();
         this.askers.set(id, opts.asker);
-        return new OpencodeSession(this, agent, id, opts.cwd);
+        return new OpencodeSession(this, agent, id, opts);
     }
 
     waitForEnd(sid: string, since: number): Promise<{ outcome: TurnResult['outcome']; error?: string }> {
@@ -250,13 +251,14 @@ class OpencodeSession implements AgentSession {
     private oc: OpencodeAdapter;
     readonly agent: AgentConfig;
     readonly id: string;
-    private cwd: string;
+    private work: OpencodeWork;
 
-    constructor(oc: OpencodeAdapter, agent: AgentConfig, id: string, cwd: string) {
+    constructor(oc: OpencodeAdapter, agent: AgentConfig, id: string, opts: SessionOptions) {
         this.oc = oc;
         this.agent = agent;
         this.id = id;
-        this.cwd = cwd;
+        this.work = new OpencodeWork(oc.api.bind(oc), id, opts.cwd, opts.pendingWorkState,
+            (state) => opts.savePendingWork?.(id, state));
     }
 
     async send(text: string): Promise<TurnResult> {
@@ -306,13 +308,7 @@ class OpencodeSession implements AgentSession {
         await this.oc.api('POST', `/api/session/${this.id}/agent`, { agent: on ? 'plan' : 'build' });
     }
 
-    async backgroundJobs(): Promise<string[]> {
-        const res = await this.oc.api<{ data: { status: string; command: string; metadata?: { sessionID?: string } }[] }>(
-            'GET',
-            `/api/shell?${new URLSearchParams({ 'location[directory]': this.cwd })}`,
-        );
-        return res.data.filter((s) => s.status === 'running' && s.metadata?.sessionID === this.id).map((s) => s.command);
-    }
+    pendingWork() { return this.work.pending(); }
 
     async turnState(): Promise<TurnState> {
         const s = await this.oc.api<{ data: { time: { updated: number; idle?: number }; outcome?: string } }>(

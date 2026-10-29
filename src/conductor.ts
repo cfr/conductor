@@ -14,9 +14,10 @@ import {
     type Role,
     type SessionRole,
 } from './config.ts';
+import { FeedbackTracker, feedbackContract, dispositionContract } from './feedback.ts';
 import { escapeHtml } from './format.ts';
 import { Jobs, logTail, readLog } from './jobs.ts';
-import { renderMarkdown } from './logs/markdown.ts';
+import { renderMarkdown, usageMetadata } from './logs/markdown.ts';
 import { emptyNextMessage, idNumber, nextReport, parseNext, summary, type PlanItem } from './plan.ts';
 import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
@@ -65,7 +66,9 @@ export class Conductor {
     private planBusy = false;
     // Turns and the steps that follow them (gate, feedback, review), counting the gaps where `busy` is null.
     private flowing = 0;
-    private waitingJobs = new Set<Role>();
+    private workPoll?: ReturnType<typeof setInterval>;
+    private drainingWork = false;
+    private recoveringWork = false;
     private summaryBusy = false;
     private jobs: Jobs;
     private local: LocalConfig;
@@ -211,11 +214,17 @@ export class Conductor {
     }
 
     async shutdown() {
+        if (this.workPoll) clearInterval(this.workPoll);
+        this.workPoll = undefined;
         await this.jobs.stopAll();
     }
 
     private get state() {
         return this.store.state;
+    }
+
+    private get feedbackTracker(): FeedbackTracker {
+        return new FeedbackTracker(this.store, join(dirname(this.local.stateFile), 'findings'), this.project);
     }
 
     private reload() {
@@ -288,6 +297,13 @@ export class Conductor {
             cwd: this.project.root,
             asker: this.asker(role),
             readOnly: role === 'chat',
+            pendingWorkState: this.state.sessions[role]?.pendingWorkState,
+            savePendingWork: (id, state) => {
+                const current = this.state.sessions[role];
+                if (current?.id !== id) return;
+                current.pendingWorkState = state;
+                this.store.save();
+            },
         });
         this.live.set(role, s);
         return s;
@@ -300,6 +316,12 @@ export class Conductor {
             cwd: this.project.root,
             asker: this.asker(role),
             readOnly: role === 'chat',
+            savePendingWork: (id, state) => {
+                const current = this.state.sessions[role];
+                if (current?.id !== id) return;
+                current.pendingWorkState = state;
+                this.store.save();
+            },
         });
         this.live.set(role, s);
         this.state.sessions[role] = {
@@ -311,7 +333,21 @@ export class Conductor {
         this.store.save();
     }
 
+    private waitingRole(): Role | undefined {
+        const order: Role[] = ['implement', 'feedback', 'review', 'plan'];
+        return order.find((role) => this.state.sessions[role]?.workWait);
+    }
+
+    private requireSettledWork() {
+        if (this.state.workConflict) throw new Error(`${this.state.workConflict}; /gate to verify the current tree first`);
+        const waiting = this.waitingRole();
+        if (waiting) throw new Error(`${waiting} still has pending work; /status or /continue ${waiting}`);
+    }
+
     private claim(what: Busy) {
+        if (this.recoveringWork) throw new Error('recovering session work; try again after /status');
+        const waiting = this.waitingRole();
+        if (waiting && waiting !== what) throw new Error(`${waiting} still has pending work; /status or /continue ${waiting}`);
         if (this.busy) {
             throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
         }
@@ -335,6 +371,7 @@ export class Conductor {
     }
 
     private async nextTask(args: string) {
+        this.requireSettledWork();
         this.reload();
         const { agent: agentArg, id } = this.parseArgs(args);
         const agentName = agentArg ?? this.project.roles.implement;
@@ -371,6 +408,10 @@ export class Conductor {
             this.state.lastGate = undefined;
             this.state.feedbackRound = undefined;
             this.state.feedbackFixing = undefined;
+            this.state.feedbackFindingIds = undefined;
+            this.state.feedbackFixBase = undefined;
+            this.state.feedbackDispositionPending = undefined;
+            this.state.workConflict = undefined;
             await this.createSession('implement', agentName, item.id);
         } finally {
             this.busy = null;
@@ -412,6 +453,7 @@ export class Conductor {
     }
 
     private adoptTask(id: string) {
+        this.requireSettledWork();
         const items = parseNext(readFileSync(join(this.project.root, 'PLAN.md'), 'utf8'));
         const found = items.find((i) => i.id === id || i.number === idNumber(id));
         const fullId = found?.id ?? (id.includes('-') ? id : this.findLoggedId(idNumber(id))) ?? id;
@@ -421,6 +463,10 @@ export class Conductor {
         this.state.lastGate = undefined;
         this.state.feedbackRound = undefined;
         this.state.feedbackFixing = undefined;
+        this.state.feedbackFindingIds = undefined;
+        this.state.feedbackFixBase = undefined;
+        this.state.feedbackDispositionPending = undefined;
+        this.state.workConflict = undefined;
         this.store.save();
     }
 
@@ -492,6 +538,7 @@ export class Conductor {
     }
 
     private async runFeedback(agentName: string) {
+        this.requireSettledWork();
         const task = this.state.task!;
         const round = (this.state.feedbackRound ?? 0) + 1;
         const first = !this.state.sessions.feedback || this.state.sessions.feedback.agent !== agentName;
@@ -509,6 +556,7 @@ export class Conductor {
             this.state.sessions.feedback!.checkedSha = await repo.head(this.project.root);
             this.state.feedbackRound = round;
             this.state.feedbackReportRetried = undefined;
+            this.state.sessions.feedback!.trackedFindings = true;
             this.state.focus = 'feedback';
             this.store.save();
         } finally {
@@ -520,7 +568,16 @@ export class Conductor {
 
     private async afterFeedback(report: string) {
         const task = this.state.task!;
-        const verdict = [...report.matchAll(/^\W*VERDICT:\W*(clean|findings)\b/gim)].pop()?.[1].toLowerCase();
+        let verdict = [...report.matchAll(/^\W*VERDICT:\W*(clean|findings)\b/gim)].pop()?.[1].toLowerCase();
+        let invalid: string | undefined;
+        let findingIds: string[] | undefined;
+        if (this.state.sessions.feedback?.trackedFindings) {
+            const receipt = await this.feedbackTracker.report(report);
+            invalid = receipt.error;
+            findingIds = receipt.findingIds;
+            if (invalid) verdict = undefined;
+            else verdict = findingIds.length ? 'findings' : 'clean';
+        }
         if (verdict === 'clean') {
             await this.afterSettledCheck(`feedback: ${task.id} is clean`);
             return;
@@ -530,7 +587,7 @@ export class Conductor {
             if (this.state.feedbackReportRetried) {
                 this.store.save();
                 await this.chat.send(
-                    'feedback: still no VERDICT after one retry; task flow paused. ' +
+                    `feedback: incomplete report after one retry${invalid ? ` (${invalid})` : ': no VERDICT'}; task flow paused. ` +
                     'Use /continue feedback to finish the report, /feedback <agent> for another check, ' +
                     'or /review to proceed to review.',
                 );
@@ -538,21 +595,23 @@ export class Conductor {
             }
             this.state.feedbackReportRetried = true;
             this.store.save();
-            await this.chat.send('feedback: no VERDICT line; asking the checker to finish its report once');
+            await this.chat.send('feedback: incomplete report; asking the checker to finish it once');
             await this.turn(
                 'feedback',
-                'Your previous turn ended without a feedback verdict. Finish your review and return the ' +
-                'complete report now. Report only: do not edit files or commit. Include actionable findings ' +
-                'with file:line and evidence, or state that none were found. End with exactly ' +
-                'VERDICT: clean or VERDICT: findings. If you cannot finish, explain what blocked you; ' +
-                'do not claim a clean review.',
+                `Finish the complete feedback report now. ${invalid ?? 'Your previous reply had no VERDICT line.'} ` +
+                'Report only: do not edit files or commit. If blocked, explain why; do not claim a clean review.\n\n' +
+                (this.state.sessions.feedback?.trackedFindings ? feedbackContract :
+                    'Include actionable findings with file:line and evidence, or state none. End with VERDICT: clean or VERDICT: findings.'),
                 `completing feedback ${this.state.feedbackRound ?? 1} on ${task.id}`,
             );
             return;
         }
-        this.state.feedbackFixing = true;
-        this.state.focus = 'implement';
-        this.store.save();
+        if (findingIds) await this.feedbackTracker.begin(findingIds);
+        else {
+            this.state.feedbackFixing = true;
+            this.state.focus = 'implement';
+            this.store.save();
+        }
         await this.turn(
             'implement',
             fill(this.project.prompts.feedbackFix, this.vars({ findings: report })),
@@ -560,12 +619,56 @@ export class Conductor {
         );
     }
 
+    private async recordFeedbackAnswer(text: string, role: 'implement' | 'review' = 'implement'): Promise<boolean> {
+        const receipt = await this.feedbackTracker.answer(text, role);
+        const retried = role === 'implement' ? this.state.feedbackDispositionRetried : this.state.sessions.review!.dispositionRetried;
+        if (role === 'implement') this.state.feedbackDispositionPending = !!receipt.error;
+        else this.state.sessions.review!.dispositionPending = !!receipt.error;
+        this.store.save();
+        if (!receipt.error) return true;
+        if (retried) {
+            await this.chat.send(`finding answer pending: ${receipt.error}; task flow paused. Use /continue ${role} to complete dispositions.`);
+            return false;
+        }
+        if (role === 'implement') this.state.feedbackDispositionRetried = true;
+        else this.state.sessions.review!.dispositionRetried = true;
+        this.store.save();
+        await this.turn(role,
+            `Your disposition report is incomplete: ${receipt.error}. Return the complete dispositions for the requested IDs. ` +
+            `Do not edit files or commit during this correction.\n\n${dispositionContract}`,
+            'completing feedback dispositions');
+        return false;
+    }
+
+    private async recordReviewReport(report: string) {
+        const ref = this.state.sessions.review!;
+        const receipt = await this.feedbackTracker.report(report, 'review');
+        if (!receipt.error) {
+            ref.findingIds = receipt.findingIds;
+            ref.expectReport = undefined;
+            ref.reportRetried = undefined;
+            this.store.save();
+            return;
+        }
+        if (ref.reportRetried) {
+            await this.chat.send(`review report pending: ${receipt.error}; use /continue review to finish the report.`);
+            return;
+        }
+        ref.reportRetried = true;
+        this.store.save();
+        await this.turn('review', `Complete your review report: ${receipt.error}. Do not edit or commit.\n\n${feedbackContract}`,
+            'completing review report');
+    }
+
     private async startReview(agentName: string) {
+        this.requireSettledWork();
         const task = this.state.task!;
         this.claim('review');
         try {
             this.live.delete('review');
             await this.createSession('review', agentName, `${task.id} review`);
+            this.state.sessions.review!.trackedFindings = true;
+            this.state.sessions.review!.expectReport = true;
             this.state.focus = 'review';
             this.store.save();
         } finally {
@@ -591,6 +694,15 @@ export class Conductor {
         if (!this.state.sessions.review) {
             await this.chat.send('no review session; /review first');
             return;
+        }
+        if (this.busy) throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
+        const ref = this.state.sessions.review;
+        if (ref.findingIds?.length) {
+            ref.fixBase = await repo.head(this.project.root);
+            ref.fixingFindings = true;
+            ref.dispositionPending = true;
+            ref.dispositionRetried = undefined;
+            this.store.save();
         }
         const p = this.project.prompts;
         const text = notes ? fill(p.fixNotes, this.vars({ notes })) : fill(p.fix, this.vars());
@@ -898,9 +1010,12 @@ export class Conductor {
             let r: TurnResult;
             let settled: { waiting: boolean; from?: string };
             try {
+                this.state.sessions[role]!.model = this.session(role).agent.model;
+                this.store.save();
+                text = await this.feedbackTracker.prompt(role, text);
                 const head = `${this.prefix(role)} ${doing}…`;
                 await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
-                this.markTurn(role, { since: Date.now(), doing });
+                this.markTurn(role, { since: Date.now(), doing, gateAttempt });
                 r = await this.session(role).send(text);
                 settled = await this.settle(role, r);
             } finally {
@@ -919,10 +1034,11 @@ export class Conductor {
         if (this.busy && this.busy !== 'plan') {
             return this.busy;
         }
-        const waiting = [...this.waitingJobs][0];
+        const waiting = this.waitingRole();
         if (waiting) {
-            return `${waiting} (background jobs)`;
+            return `${waiting} (pending work)`;
         }
+        if (this.state.workConflict) return 'concurrent work awaiting verification';
         return this.flowing > 0 ? 'the task flow' : undefined;
     }
 
@@ -979,9 +1095,46 @@ export class Conductor {
 
     private async afterTurn(role: Role, r: TurnResult, gateFrom: string | undefined, gateAttempt: number) {
         if (role === 'feedback') {
+            if (this.state.workConflict) {
+                await this.chat.send(`${this.state.workConflict}; feedback is stale. Wait for pending work, then /gate.`);
+                return;
+            }
             if (r.outcome === 'succeeded') {
                 await this.afterFeedback(r.text);
             }
+            return;
+        }
+        if (role === 'implement' && this.state.feedbackFixing && this.state.feedbackFindingIds?.length) {
+            if (r.outcome !== 'succeeded') return;
+            if (!(await this.recordFeedbackAnswer(r.text))) return;
+            const base = this.state.feedbackFixBase!;
+            if ((await repo.commitsSince(this.project.root, base)).length) gateFrom = base;
+            if (gateFrom === undefined) this.state.feedbackFindingIds = undefined;
+            this.store.save();
+        }
+        if (role === 'review' && this.state.sessions.review?.trackedFindings) {
+            const ref = this.state.sessions.review;
+            if (!ref.fixingFindings && gateFrom !== undefined && ref.findingIds?.length) {
+                ref.fixingFindings = true;
+                ref.fixBase = gateFrom;
+                this.store.save();
+            }
+            if (ref.fixingFindings) {
+                if (r.outcome !== 'succeeded' || !(await this.recordFeedbackAnswer(r.text, 'review'))) return;
+                if ((await repo.commitsSince(this.project.root, ref.fixBase!)).length) gateFrom = ref.fixBase;
+                else {
+                    ref.fixingFindings = undefined;
+                    ref.findingIds = undefined;
+                    this.store.save();
+                }
+            } else if (!this.state.workConflict && r.outcome === 'succeeded' && gateFrom === undefined &&
+                (ref.expectReport || r.text.includes('```conductor-feedback'))) {
+                await this.recordReviewReport(r.text);
+                return;
+            }
+        }
+        if (role !== 'plan' && this.state.workConflict) {
+            await this.chat.send(`${this.state.workConflict}; automatic flow paused. Wait for pending work, then /gate.`);
             return;
         }
         if (gateFrom !== undefined) {
@@ -1007,6 +1160,28 @@ export class Conductor {
         const ref = this.state.sessions[role];
         if (ref && (turn || ref.turn)) {
             ref.turn = turn;
+            this.store.save();
+        }
+    }
+
+    private async recoverPendingWork() {
+        for (const role of roles as Role[]) {
+            const ref = this.state.sessions[role];
+            if (!ref || ref.workWait) continue;
+            let detail: string;
+            try {
+                const work = await this.session(role).pendingWork();
+                if (!work.length) continue;
+                detail = work.map((w) => `${w.kind}: ${w.description}`).join('\n');
+            } catch (e) { detail = `pending-work status unknown: ${describeError(e)}`; }
+            ref.workWait = { since: ref.turn?.since ?? 0, result: { outcome: 'succeeded', text: '' },
+                gateAttempt: ref.turn?.gateAttempt ?? 0, readOnly: false, detail };
+            this.store.save();
+        }
+        const knownPending = (roles as Role[]).filter((role) => role !== 'plan' && this.state.sessions[role]?.workWait);
+        if (knownPending.length > 1) {
+            this.state.workConflict = `Recovered overlapping work: ${knownPending.join(', ')}`;
+            this.state.focus = this.state.sessions.implement ? 'implement' : knownPending[0];
             this.store.save();
         }
     }
@@ -1037,23 +1212,36 @@ export class Conductor {
     }
 
     // `from`: the commit before the session's new commits, when it committed since it was last checked.
-    private async settle(role: Role, r: TurnResult, readOnly = false): Promise<{ waiting: boolean; from?: string }> {
-        this.waitingJobs.delete(role);
+    private async settle(role: Role, r: TurnResult, readOnly = false, postReply = true): Promise<{ waiting: boolean; from?: string }> {
         await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
         const p = this.prefix(role);
-        if (r.text) {
+        if (r.text && postReply) {
             await this.chat.sendMarkdown(p, r.text, role);
+        }
+        let detail: string;
+        try {
+            const work = await this.session(role).pendingWork();
+            detail = work.map((w) => `  ${w.kind}: ${w.description.split('\n')[0].slice(0, 160)}`).join('\n');
+        } catch (e) {
+            detail = `pending-work status unknown: ${describeError(e)}`;
+        }
+        if (detail) {
+            const ref = this.state.sessions[role]!;
+            const old = ref.workWait;
+            ref.workWait = { since: old?.since ?? ref.turn?.since ?? Date.now() - 1,
+                result: r, readOnly, gateAttempt: old?.gateAttempt ?? ref.turn?.gateAttempt ?? 0, detail };
+            this.store.save();
+            this.watchWork();
+            if (old?.detail !== detail) await this.chat.send(`${p} waiting for pending work before advancing:\n${detail}`, role);
+            return { waiting: true };
+        }
+        if (this.state.sessions[role]?.workWait) {
+            delete this.state.sessions[role]!.workWait;
+            this.store.save();
         }
         if (r.outcome !== 'succeeded') {
             await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}; /continue to resume it`, role);
             return { waiting: false };
-        }
-        const jobs = await this.session(role).backgroundJobs().catch(() => []);
-        if (jobs.length) {
-            const list = jobs.map((j) => `  ${j.split('\n')[0].slice(0, 120)}`).join('\n');
-            await this.chat.send(`${p} ended its turn with background jobs running; waiting for it to resume when they exit:\n${list}`, role);
-            this.waitingJobs.add(role);
-            return { waiting: true };
         }
         if (readOnly) {
             return { waiting: false };
@@ -1090,36 +1278,79 @@ export class Conductor {
         const role: Role = found;
         const p = this.prefix(role);
         if (ev.phase === 'started') {
+            const otherWaiting = this.waitingRole();
+            if (role !== 'plan' && ((this.busy && this.busy !== role) ||
+                (otherWaiting && otherWaiting !== role && otherWaiting !== 'plan'))) {
+                this.state.workConflict = `${role} resumed during ${this.busy ?? otherWaiting}`;
+                this.state.focus = this.state.sessions.implement ? 'implement' : role;
+            }
+            const ref = this.state.sessions[role]!;
+            ref.workWait ??= { since: Date.now() - 1, result: { outcome: 'succeeded', text: '' },
+                readOnly: role === 'plan' && this.taskRunning(), gateAttempt: 0, detail: 'session resumed' };
+            this.store.save();
+            this.watchWork();
             const clash = this.busy && this.busy !== role ? `; warning: ${this.busy} is running too, so two agents are in the tree` : '';
             await this.chat.send(`${p} resumed on its own (e.g. a background job finished)…${clash}`, role);
             return;
         }
+        const ref = this.state.sessions[role]!;
+        ref.workWait ??= { since: ref.turn?.since ?? Date.now() - 1,
+            result: { outcome: ev.outcome, error: ev.error, text: '' }, readOnly: false,
+            gateAttempt: ref.turn?.gateAttempt ?? 0, detail: 'waiting for resumed session to settle' };
         this.markTurn(role, undefined);
-        if (this.busy) {
-            await this.exportLog(role).catch((e: Error) => this.chat.send(`log export failed: ${e.message}`));
-            const text = await this.session(role).lastReply();
-            if (text) {
-                await this.chat.sendMarkdown(p, text, role);
-            }
-            await this.chat.send(`${p} finished a turn it started itself; ${this.busy} is running, so its commits are checked after the next turn`, role);
+        this.store.save();
+        this.watchWork();
+        await this.drainWork();
+    }
+
+    private watchWork() {
+        if (this.workPoll) return;
+        this.workPoll = setInterval(() => this.detach(this.drainWork()), 2000);
+        this.workPoll.unref();
+    }
+
+    private async drainWork() {
+        if (this.drainingWork || this.recoveringWork || this.busy || this.planBusy) return;
+        const role = this.waitingRole();
+        if (!role) {
+            if (this.workPoll) clearInterval(this.workPoll);
+            this.workPoll = undefined;
             return;
         }
-        this.claim(role);
+        this.drainingWork = true;
         this.flowing++;
+        this.claim(role);
+        const wait = this.state.sessions[role]!.workWait!;
         try {
-            let r: TurnResult;
-            let settled: { waiting: boolean; from?: string };
-            try {
-                r = { outcome: ev.outcome, error: ev.error, text: await this.session(role).lastReply() };
-                settled = await this.settle(role, r);
-            } finally {
-                this.busy = null;
+            const session = this.session(role);
+            const st = await session.turnState(wait.since);
+            if (st.running) return;
+            const work = await session.pendingWork();
+            if (work.length) {
+                const detail = work.map((w) => `${w.kind}: ${w.description.split('\n')[0].slice(0, 160)}`).join('\n');
+                if (wait.detail !== detail) {
+                    wait.detail = detail;
+                    this.store.save();
+                    await this.chat.send(`${this.prefix(role)} waiting for pending work:\n${detail}`, role);
+                }
+                return;
             }
-            if (!settled.waiting) {
-                await this.afterTurn(role, r, settled.from, 0);
-            }
+            const r: TurnResult = { outcome: st.outcome, error: st.error, text: await session.lastReply() };
+            const settled = await this.settle(role, r, wait.readOnly, r.text !== wait.result.text);
+            this.busy = null;
+            if (!settled.waiting) await this.afterTurn(role, r, settled.from, wait.gateAttempt);
+        } catch (e) {
+            // Preserve the wait/lock when a status lookup fails; never infer an idle tree.
+            const ref = this.state.sessions[role];
+            if (!ref?.workWait) throw e;
+            const detail = `pending-work status unknown: ${describeError(e)}`;
+            if (ref.workWait.detail !== detail) await this.chat.send(`${this.prefix(role)} ${detail}`, role);
+            ref.workWait.detail = detail;
+            this.store.save();
         } finally {
+            this.busy = null;
             this.flowing--;
+            this.drainingWork = false;
         }
     }
 
@@ -1130,6 +1361,12 @@ export class Conductor {
             await this.chat.send('no implementation or review session to gate');
             return;
         }
+        if ((role === 'implement' && this.state.feedbackDispositionPending) || ref.dispositionPending) {
+            await this.chat.send(`finding dispositions are pending; use /continue ${role} before /gate`);
+            return;
+        }
+        const waiting = this.waitingRole();
+        if (waiting) throw new Error(`${waiting} still has pending work; wait before /gate`);
         const root = this.project.root;
         if ((await repo.commitsSince(root, ref.startSha)).length === 0) {
             await this.chat.send(`${this.prefix(role)} has no commits since its session started`);
@@ -1165,7 +1402,14 @@ export class Conductor {
             this.busy = null;
         }
         const sha = await repo.head(root);
-        this.state.lastGate = { ok: g.ok, step: g.failedStep, sha, at: new Date().toISOString() };
+        const gateFile = join(this.project.logDir, `${this.state.task?.id ?? 'task'}-gate.log`);
+        mkdirSync(this.project.logDir, { recursive: true });
+        const at = new Date().toISOString();
+        const record = { ok: g.ok, step: g.failedStep, sha, at,
+            commands: this.project.gate.map((s) => s.cmd), seconds: g.seconds, logFile: gateFile };
+        const gateEntry = `${JSON.stringify(record)}\n${g.log}\n`;
+        writeFileSync(gateFile, (existsSync(gateFile) ? readFileSync(gateFile, 'utf8') : '') + gateEntry);
+        this.state.lastGate = record;
         this.store.save();
         const task = this.state.task;
         if (!g.ok) {
@@ -1177,6 +1421,11 @@ export class Conductor {
                 await this.chat.send('gate failed twice; waiting for you (plain text to the agent, or fix it yourself and /review)');
             }
             return;
+        }
+        if (this.state.workConflict) {
+            this.state.workConflict = undefined;
+            this.state.feedbackRound = undefined;
+            this.store.save();
         }
         const from = this.state.sessions[role]?.startSha ?? before;
         const messages = await repo.commitMessages(root, from);
@@ -1194,10 +1443,19 @@ export class Conductor {
         );
         await this.chat.sendFile(`${task?.id ?? 'task'}-${role}.diff`, await repo.diff(root, from));
         if (role === 'implement') {
+            this.state.feedbackFindingIds = undefined;
+            this.state.feedbackFixBase = undefined;
+            this.state.feedbackDispositionRetried = undefined;
+            this.state.feedbackDispositionPending = undefined;
             this.state.feedbackFixing = undefined;
             this.store.save();
             await this.afterImplementGate();
         } else if (role === 'review') {
+            const ref = this.state.sessions.review!;
+            ref.fixingFindings = undefined;
+            ref.dispositionPending = undefined;
+            ref.findingIds = undefined;
+            this.store.save();
             await this.chat.send(`${task?.id ?? 'task'} done; /next when ready`);
         }
     }
@@ -1235,8 +1493,13 @@ export class Conductor {
         const file = join(dir, this.logName(role, ref, planTouched));
         if (ref.logFile && ref.logFile !== file && existsSync(ref.logFile)) {
             renameSync(ref.logFile, file);
+            const previousUsage = ref.logFile.replace(/\.md$/, '.usage.json');
+            if (existsSync(previousUsage)) renameSync(previousUsage, file.replace(/\.md$/, '.usage.json'));
         }
         writeFileSync(file, renderMarkdown(t));
+        writeFileSync(file.replace(/\.md$/, '.usage.json'), JSON.stringify({
+            ...usageMetadata(t) as object, agent: this.session(role).agent,
+        }, null, 2) + '\n');
         if (ref.logFile !== file) {
             ref.logFile = file;
             this.store.save();
@@ -1251,6 +1514,9 @@ export class Conductor {
             if (f) {
                 done.push(f);
             }
+        }
+        if (this.state.task && existsSync(join(dirname(this.local.stateFile), 'findings', `${this.state.task.id}.json`))) {
+            done.push(this.feedbackTracker.export());
         }
         await this.chat.sendHtml(done.length ? `exported:\n${done.map(code).join('\n')}` : 'no sessions');
     }
@@ -1294,9 +1560,10 @@ export class Conductor {
             `task: ${escapeHtml(s.task?.id ?? '-')}`,
             `running: ${escapeHtml(this.runningTask() ?? 'nothing')}${this.planBusy ? ' (plan answering)' : ''}${this.chat.pendingQuestions() ? ` (${this.chat.pendingQuestions()} question(s) waiting)` : ''}`,
             `focus: ${s.focus ?? '-'}${this.chatBusy ? ' (chat answering)' : ''}`,
+            ...(s.workConflict ? [`verification required: ${escapeHtml(s.workConflict)}`] : []),
         ];
         for (const [role, ref] of Object.entries(s.sessions)) {
-            lines.push(`${role}: ${this.agent(ref.agent).tag} ${ref.id}${ref.logFile ? `\n  log ${code(ref.logFile)}` : ''}`);
+            lines.push(`${role}: ${this.agent(ref.agent).tag} ${ref.id}${ref.workWait ? `\n  pending: ${escapeHtml(ref.workWait.detail)}` : ''}${ref.logFile ? `\n  log ${code(ref.logFile)}` : ''}`);
         }
         for (const c of this.project.commands) {
             const job = this.jobs.get(c.name);
@@ -1312,22 +1579,28 @@ export class Conductor {
     }
 
     async announce() {
-        const reaped = await this.jobs.reapStale();
-        if (reaped.length) {
-            await this.chat.send(`stopped leftover ${reaped.map((n) => `/${n}`).join(', ')} from a previous run`);
-        }
-        const s = this.state;
-        const text = `conductor up: ${this.project.root}${s.task ? `, task ${s.task.id}` : ''}. /help`;
-        const commands = new Map<string, string>();
-        for (const line of this.help().split('\n')) {
-            const m = /^\/([a-z0-9_-]+)\b.*? - (.*)$/.exec(line);
-            if (m && !commands.has(m[1])) {
-                commands.set(m[1].replace(/-/g, '_'), m[2].slice(0, 256));
+        this.recoveringWork = true;
+        try {
+            const reaped = await this.jobs.reapStale();
+            if (reaped.length) {
+                await this.chat.send(`stopped leftover ${reaped.map((n) => `/${n}`).join(', ')} from a previous run`);
             }
-        }
-        commands.set('help', 'commands');
-        await this.chat.takeOver(text, [...commands].map(([command, description]) => ({ command, description })));
-        await this.recoverTurns();
+            const s = this.state;
+            const text = `conductor up: ${this.project.root}${s.task ? `, task ${s.task.id}` : ''}. /help`;
+            const commands = new Map<string, string>();
+            for (const line of this.help().split('\n')) {
+                const m = /^\/([a-z0-9_-]+)\b.*? - (.*)$/.exec(line);
+                if (m && !commands.has(m[1])) {
+                    commands.set(m[1].replace(/-/g, '_'), m[2].slice(0, 256));
+                }
+            }
+            commands.set('help', 'commands');
+            await this.chat.takeOver(text, [...commands].map(([command, description]) => ({ command, description })));
+            await this.recoverPendingWork();
+            await this.recoverTurns();
+        } finally { this.recoveringWork = false; }
+        if (this.waitingRole()) this.watchWork();
+        await this.drainWork();
     }
 }
 

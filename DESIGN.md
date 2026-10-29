@@ -184,6 +184,54 @@ full outputs, as opencode's export does.
 The review step becomes `review-plan` when `PLAN.md` differs from the commit the review session
 started at (committed or not); the file is renamed on the next export.
 
+## Finding ledger and verification evidence
+
+The bridge appends validation guidance, prior finding dispositions and gate evidence even to
+project-overridden prompts. `src/feedback.ts` owns these contracts and the handoff context;
+`src/findings.ts` validates reports and keeps one atomic JSON ledger per task beside bridge state.
+Reports use fenced `conductor-feedback` JSON; repair replies use `conductor-dispositions` JSON.
+Malformed replies remain pending and get one automatic correction turn, then the flow waits.
+
+Stable finding IDs, category, source agent/model/role/session/SHA, evidence, related/duplicate links,
+repair dispositions and actual fixing commits survive session replacement. Claimed fixes and
+checker verification are distinct; a verifier must use another session and a SHA containing the
+fixes. New checkers see rejection reasons so they can assess them rather than repeat paperwork.
+Final review also verifies the last feedback repair; findings fixed by `/fix` remain unverified
+until another review assesses them. Ledger receipts are retained and replayed reports are
+idempotent. `wlog/<task>-findings.md` exports the ledger and links to the original session logs.
+
+The bridge records gate commands, SHA, time, result and full output in `wlog/<task>-gate.log`.
+Checkers use focused experiments and the bridge's evidence, avoiding redundant full runs on an
+unchanged tree. Regression-test sensitivity, real caller paths and maximum supported bounds are
+explicit prompt requirements; the bridge cannot establish their adequacy from a green gate alone.
+
+Each session export has a `.usage.json` companion with exact totals and turn indices. Codex CLI
+usage is turn-aggregate data: it cannot establish model-step counts or maximum single-request
+context, so those measurements are marked unavailable rather than inferred from aggregate input.
+Old saved Codex sessions are normalized on resume; raw CLI usage is retained when available.
+
+## Pending work barrier
+
+`AgentSession.pendingWork()` covers background shell jobs, subagents and undelivered work. The
+opencode adapter discovers background `subagent` tool results through paginated assistant messages,
+using their structured session metadata. Inline results acknowledge foreground children without
+requiring a synthetic notification. It recursively checks descendants, durable synthetic completion
+metadata and inbox entries. Completion is acknowledged only after a new parent assistant
+request follows the notification and the parent becomes idle. Final active-session/inbox/time
+checks catch resumes racing the transcript reads.
+
+Discovered child IDs, tool IDs, notification receipts and scan cursors persist with the session.
+Conductor retains a waiting turn and its gate retry budget, serializes wakeups, and rechecks every
+two seconds without prompting the model. Status errors hold the barrier instead of implying idle.
+Startup rediscovers pending work even if the previous process missed the resume event. New tasks,
+checkers and gates cannot replace or advance a waiting session; explicit continuation of that same
+session is still possible. Read-only chat remains independent.
+
+Unexpected overlapping task phases set a persistent verification conflict. Their outcomes cannot
+advance the automatic flow until pending work clears and an explicit successful gate verifies the
+current tree, then starts the feedback sequence afresh. Shell/subagent inspection is implemented
+for opencode; adapters without detached-work notifications currently report no additional work.
+
 ## Agent questions
 
 Agents block in two ways and both must reach the chat:

@@ -1,17 +1,30 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { PendingWorkState, TurnResult } from './agents/types.ts';
 import type { Role, SessionRole } from './config.ts';
 import type { PlanItem } from './plan.ts';
 
 export interface SessionRef {
     agent: string;
+    model?: string;
     id: string;
     title: string;
     startSha: string;
     checkedSha?: string;
     logFile?: string;
+    reportSha?: string;
+    trackedFindings?: boolean;
+    reportRetried?: boolean;
+    expectReport?: boolean;
+    findingIds?: string[];
+    fixBase?: string;
+    fixingFindings?: boolean;
+    dispositionRetried?: boolean;
+    dispositionPending?: boolean;
+    pendingWorkState?: PendingWorkState;
+    workWait?: { since: number; result: TurnResult; readOnly: boolean; gateAttempt: number; detail: string };
     // set while a turn runs, so a restart can tell how it ended
-    turn?: { since: number; doing: string };
+    turn?: { since: number; doing: string; gateAttempt?: number };
     // planning commits kept so far; other commits land beside a planning session
     planCommits?: string[];
 }
@@ -21,6 +34,9 @@ export interface GateRecord {
     step?: string;
     sha: string;
     at: string;
+    commands?: string[];
+    seconds?: number;
+    logFile?: string;
 }
 
 export interface State {
@@ -34,6 +50,11 @@ export interface State {
     feedbackFixing?: boolean;
     // Persist the retry budget across restarts and failed retry turns.
     feedbackReportRetried?: boolean;
+    feedbackFindingIds?: string[];
+    feedbackFixBase?: string;
+    feedbackDispositionRetried?: boolean;
+    feedbackDispositionPending?: boolean;
+    workConflict?: string;
 }
 
 export class Store {

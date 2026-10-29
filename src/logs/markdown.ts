@@ -5,6 +5,9 @@ export type Part =
 
 export interface Usage {
     steps: number;
+    turns?: number;
+    stepsKnown?: boolean;
+    maxContextKnown?: boolean;
     input: number;
     // reasoning included
     output: number;
@@ -26,6 +29,7 @@ export interface Message {
     role: 'user' | 'assistant';
     parts: Part[];
     usage?: Usage;
+    usageSource?: { kind: 'codex-turn'; raw?: Record<string, number> };
 }
 
 export interface Transcript {
@@ -51,6 +55,9 @@ export function addStep(u: Usage, s: Step) {
 
 function addUsage(to: Usage, u: Usage) {
     to.steps += u.steps;
+    if (u.turns !== undefined) to.turns = (to.turns ?? 0) + u.turns;
+    if (u.stepsKnown === false) to.stepsKnown = false;
+    if (u.maxContextKnown === false) to.maxContextKnown = false;
     to.input += u.input;
     to.output += u.output;
     to.cacheRead += u.cacheRead;
@@ -68,12 +75,13 @@ function count(n: number): string {
 
 export function formatUsage(u: Usage): string {
     const parts = [
-        `${u.steps} step${u.steps === 1 ? '' : 's'}`,
+        ...(u.turns ? [`${u.turns} turn${u.turns === 1 ? '' : 's'}`] : []),
+        u.stepsKnown === false ? 'model steps unavailable' : `${u.steps} step${u.steps === 1 ? '' : 's'}`,
         `input ${count(u.input)}`,
         `output ${count(u.output)}`,
         `cache read ${count(u.cacheRead)}`,
         `cache write ${count(u.cacheWrite)}`,
-        `max context ${count(u.maxContext)}`,
+        u.maxContextKnown === false ? 'max context unavailable' : `max context ${count(u.maxContext)}`,
     ];
     if (u.compactions) {
         parts.push(`${u.compactions} compaction${u.compactions === 1 ? '' : 's'}`);
@@ -118,7 +126,7 @@ export function renderMarkdown(t: Transcript, maxToolOutputLines = 0): string {
             addUsage(total, m.usage);
         }
     }
-    const metered = total.steps > 0 || total.compactions > 0;
+    const metered = total.steps > 0 || (total.turns ?? 0) > 0 || total.compactions > 0;
     const out: string[] = [
         `# ${t.title}`,
         '',
@@ -162,4 +170,27 @@ export function renderMarkdown(t: Transcript, maxToolOutputLines = 0): string {
     }
     sections.forEach((lines, i) => out.push(...(i ? ['---', ''] : []), ...lines));
     return out.join('\n');
+}
+
+export function usageMetadata(t: Transcript): unknown {
+    let turn = 0;
+    const entries: unknown[] = [];
+    const total = emptyUsage();
+    const meteredTurns = new Set<number>();
+    for (const m of t.messages) {
+        if (m.role === 'user') turn++;
+        if (m.usage) {
+            addUsage(total, m.usage);
+            if (turn > 0) meteredTurns.add(turn);
+            entries.push({ turn, ...m.usage,
+                steps: m.usage.stepsKnown === false ? null : m.usage.steps,
+                maxContext: m.usage.maxContextKnown === false ? null : m.usage.maxContext,
+                source: m.usageSource ?? { kind: 'model-step' },
+            });
+        }
+    }
+    return { version: 1, sessionId: t.id, title: t.title, updated: t.updated,
+        total: { ...total, turns: turn, unmeteredTurns: turn - meteredTurns.size,
+            steps: total.stepsKnown === false ? null : total.steps,
+            maxContext: total.maxContextKnown === false ? null : total.maxContext }, entries };
 }

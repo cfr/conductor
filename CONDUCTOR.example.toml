@@ -4,6 +4,7 @@
 # chat. The conductor re-reads it when a command starts (/next, /review, /plan...), so edits apply
 # without a restart.
 
+# Conductor records this gate result for checkers; unchanged green trees need no full rerun.
 [gate]
 build = "cmake --build --preset desktop"
 test = "ctest --preset desktop"

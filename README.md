@@ -1,163 +1,316 @@
 # conductor
 
-opencode/Claude Code/Telegram orchestration tool.
-
-From one Telegram chat, one agent implements a `PLAN.md` item, the bridge runs the project's
-verification gate, a second agent reviews, and `/fix` applies the review. Agents run through
-opencode (its background service) or Claude Code (the Agent SDK); every session is exported to
-markdown after each turn. See `DESIGN.md` for the flow and its reasons.
+A Telegram bridge for developing a local project with opencode, Codex CLI, and Claude Code.
+Agents implement `PLAN.md` tasks, check each other's work, review changes, and apply fixes.
+Conductor runs the project's verification gate, tracks findings and repair commits, and exports
+session logs and token usage. Agents and role defaults belong to the project; models can be mixed
+across harnesses. See [DESIGN.md](DESIGN.md) for the architecture.
 
 ## Setup
 
-Node 24 or newer (TypeScript runs directly through Node's type stripping, no build step).
+Use Node 24 or newer. Node runs the TypeScript source directly; there is no build step.
 
-    npm install
-    cp config.example.toml config.toml   # project path, bot token, your Telegram user id
+```sh
+npm install
+cp config.example.toml config.toml
+```
 
-`config.toml` is gitignored: it holds the bot token. Messages from anyone but
-`telegram.allowed_user_id` are ignored. Only one process may poll a bot token, so stop
-opencode-telegram-bot while the conductor runs on the same token (the conductor exits with a
-message on `409 Conflict`).
+Edit `config.toml` with the project path, Telegram bot token, and your numeric Telegram user ID.
+It is gitignored because it contains the token. Only the configured user can control the bot.
+One process may poll a bot token at a time; stop any other bot using it. Conductor exits on a
+Telegram `409 Conflict`.
 
-The project needs a `CONDUCTOR.toml` at its root: gate commands, agents, roles, flow, project
-commands and optional prompts. `CONDUCTOR.example.toml` is the one for bane.
+Install and authenticate the harnesses you intend to use:
 
-## Run
+| Harness | Execution |
+| --- | --- |
+| `opencode` | Connects to its shared local background service; sessions also appear in its TUI. |
+| `codex` | Uses `codex exec --json` and `exec resume`. Sign in with `codex login`. |
+| `claude` | Runs Claude Code through the Anthropic Agent SDK. |
 
-    npm start
+Conductor can start without a separate Claude Code installation and does not launch a Claude
+process merely because the adapter exists. A Claude process starts only when a Claude session
+gets a turn. The Anthropic SDK npm dependency is still required because it is imported at startup.
+Saved sessions refer to configured agent names; keep those definitions while using the sessions.
 
-Console lines carry a local timestamp. Ctrl-C stops the conductor (its background commands too); a
-second Ctrl-C, or 15 seconds without finishing, forces the exit.
+The target project needs `PLAN.md` with a `## Next` list and `CONDUCTOR.toml` at its root.
+[CONDUCTOR.example.toml](CONDUCTOR.example.toml) is a starting template based on bane, rather than
+a copy of its current live configuration. Adjust its models, gate, and commands for your project.
 
-Then `/help` in the chat. The usual loop:
+## Configuration
 
-- `/next [agent] [id]`: confirm, and the implementing agent starts on the first `PLAN.md` "Next"
-  item (or the given one)
-- after a turn that committed, the gate runs; a failure goes back to the agent once
-- when the gate passes, the feedback agent (`roles.feedback`, if set) checks the work and reports;
-  the implementer fixes and commits, the gate runs, and this repeats up to `[flow]
-  feedback_rounds` times (default: one per agent); a list such as `["glm", "glm", "mm"]` gives each
-  round the next agent, a repeat rechecks the fixes in the same session, and a new agent checks the
-  work afresh; a clean verdict skips the current agent's remaining rechecks and moves on to the
-  next agent; `/feedback [agent]` adds a round
-- then the review starts by itself and its findings are posted
-- `/fix [notes]`: the reviewer fixes and commits, the gate runs again
-- `/continue [role] [notes]` resumes a turn that stopped early (a provider error, `/stop`, a
-  restart); a failed or interrupted turn says so with this hint
-- `/review [agent] <id>` reviews work done outside the conductor, e.g. a task GLM finished in the
-  TUI
-- plain text goes to the current session; reply to an agent's message to reach that session
-- `/gate` runs the gate on the current session's commits by hand and continues from there (the
-  review starts after an implementation), e.g. after fixing something yourself
+The two configuration files serve different purposes:
 
-Every turn the conductor starts posts its prompt under the "implementing…", "fixing…" line as a
-collapsed quote (cut at one message), so you can see what the agent was told.
+| File | Contents |
+| --- | --- |
+| Conductor's `config.toml` | Project path, Telegram credentials, state path and opencode URL. |
+| Project's `CONDUCTOR.toml` | Gate, agents, roles, feedback rounds, commands and prompts. |
 
-If the conductor stops during a turn (a crash, Ctrl-C), the next start reports how that turn went:
-one still running in opencode is followed as usual; one that ended while the conductor was down gets
-its reply, log, gate and review as if nothing happened; a Claude Code turn dies with the conductor
-and is reported as interrupted, ready for `/continue`.
+Each `[agents.<name>]` selects a `harness`, `model`, and unique `tag`. The name selects the agent
+in commands; the tag prefixes replies and names logs. For opencode, model IDs use `provider/model`
+and `variant` optionally selects a model variant. Claude and Codex accept optional `effort`.
+Claude also accepts `permission_mode`; see the example and [DESIGN.md](DESIGN.md).
 
-When opencode resumes a session by itself (a background job the agent started finished), the
-conductor posts that and handles the end of that turn like any other: reply, log, gate, review. A
-turn that ends while its own background jobs still run (an agent waiting on a test run it started)
-is not taken as finished: the conductor names the jobs and waits for that resume instead of moving
-on to the gate, feedback or review. If another turn is running when a session resumes, only the
-reply and the log are handled, with a warning that two agents are in the tree. Commits are checked
-against the last commit the conductor saw for the session, so a commit made in such a turn (or one
-it missed) is still picked up at the end of the next one.
+Roles reference those names. For example, using agents defined in the example configuration:
 
-`/chat [new] [agent] <message>` talks about the project in a separate read-only session (Claude Code
-plan mode, opencode's `plan` agent) that runs alongside the task flow: reply to its messages to
-continue, `/chat new` starts over, `/stop chat` interrupts it, `/chat stop` closes it (the log
-stays). It uses `roles.chat` (default: the planning agent), survives `/next`, and logs to
-`<task-id>-chat-<tag>.md` (`chat-<date>-<tag>.md` with no task). A Claude Code agent that tries to
-hand in a plan there (`ExitPlanMode`) is told nobody sees it and asked to put it in its reply.
+```toml
+[roles]
+implement = "glm"
+feedback = ["glm", "dsf"]
+review = "codex"
+plan = "codex"
+chat = "codex"
+summary = "codex"
+```
 
-`/summary [implement|feedback|review|plan|chat] [agent]` has a one-off read-only session
-(`roles.summary`, default: the chat agent) read the running session's log, or the focused one's, and
-post what is going on: goal, progress, the current step, problems.
+`implement`, `review`, and `plan` are required. `feedback` is optional: one agent name or an ordered
+list. `chat` defaults to `plan`; `summary` defaults to `chat`. Commands can override the default
+agent, for example `/next glm`, `/review codex`, or `/chat codex explain this subsystem`.
 
-`/todo` lists the `PLAN.md` "Next" items (`/todo <id>` shows one in full) without an agent.
-`/plan [agent] [topic]` opens a discussion that may edit only `PLAN.md`; `/plan done` has the agent
-write the items and commit `PLAN.md` with a message following the project's rules. Whenever a
-planning turn commits (also when you asked for the commit in plain text), the conductor shows the
-commit, warns about files other than `PLAN.md`, offers to undo it and, when kept, names the `/next`
-item. A `/plan done` with nothing left to write lists the session's earlier planning commits.
-`/plan` also works while a task runs (implementation, feedback, the gate, the review, or an agent
-waiting on its background jobs): its turns are then read-only, so the agent drafts items in its
-replies, and `/plan done` is refused until the task is idle. Each planning turn after commits
-landed starts with their list and asks the agent to re-read `PLAN.md` and point out adjustments.
-The planning session runs beside the task flow (reply to its messages; plain text keeps going to
-the task, `/stop plan` interrupts it) and survives `/next`.
-`/status`, `/stop`, `/agents` and `/log` do what they say.
+Gate entries run in order; the first nonzero exit fails the gate. Use the project's complete
+verification command. Bane, for example, checks both debug and release builds and test suites:
 
-Project commands come from `[commands.<name>]` in `CONDUCTOR.toml` (`cmd`, `description`,
-`confirm` for a yes/no button first, `background` for long-running ones, `ready` a regular
-expression: a background command reports its output from the first matching line, e.g. its URL,
-instead of a snapshot five seconds after the start, `aliases` other names it answers to, such as
-`["server"]` for `serve`, left out of the command menu). Text after the command is appended to
-`cmd`. A one-shot command reports its exit status and output tail (full log
-attached when long) and waits for no agent turn or gate to be running; a background one starts
-with `/<name>`, shows its status when sent again and stops with `/<name> stop` (the whole process
-group). The conductor stops its background commands when it exits (Ctrl-C, SIGTERM, a closed
-terminal, a `409`); one left over from a run that could not (killed, crashed) is stopped at the
-next start through its `state/commands/<name>.pid`. Output logs are in `state/commands/`. Agents
-never run these.
+```toml
+[gate]
+all = "tools/check all"
+```
 
-Agent replies are rendered from markdown to Telegram HTML (headings, bold, code blocks, lists,
-links, quotes, tables as preformatted text); a chunk Telegram rejects is resent as plain text.
-Command output is posted as a code block, cut to its newest lines. Telegram calls that fail on the
-network are retried for about three minutes.
+Conductor reloads project configuration when commands such as `/next`, `/review`, and `/plan`
+start. Existing sessions retain their selected agent. Restart conductor after adding command
+names or aliases because Telegram handlers are registered at startup. Machine settings and code
+changes also require a restart.
 
-Logs land in the project's `wlog/` as `<task-id>-<tag>.md`, `<task-id>-feedback-<tag>.md`,
-`<task-id>-review[-plan]-<tag>.md`, `<task-id>-chat-<tag>.md` and `<task-id>-plan-<tag>.md` (named
-after the task current when `/plan` opened it; `plan-<date>-<topic>-<tag>.md` with none), in
-opencode's `/export` layout for both harnesses. A new chat or planning session whose log name is
-taken gets a `-2`, `-3`, ... suffix. The header carries a `**Tokens:**` line for the session and
-each user turn a `**Turn tokens:**` line (steps, input, output with reasoning, cache reads and
-writes, the largest context one step sent, compactions), so token use survives the sessions.
+## Run and task flow
 
-## Checks
+```sh
+npm start
+```
 
-    npm run check   # tsc --noEmit
-    npm test        # node --test
+Set `CONDUCTOR_CONFIG` to use a different local config file. Console messages carry local
+timestamps. Ctrl-C stops conductor and its managed project commands; a second Ctrl-C or a
+15-second shutdown timeout forces exit.
 
-## Status
+The normal loop is:
 
-Prototype, in daily use on bane over Telegram: GLM-5.3 implements, DeepSeek V4.1 Flash runs the
-feedback check, Opus 5.5 reviews, chats and plans.
+1. `/next [agent] [id]` shows the selected `PLAN.md` item and asks for confirmation. Without an
+   ID it takes the first item under `## Next`. The agent implements and commits.
+2. Conductor runs the gate after a committing turn. A failure goes back to the agent once;
+   a second failure waits for you. A turn without a commit normally waits for your response.
+3. Feedback agents check in the configured order. Actionable findings go to the implementer,
+   which records dispositions and commits repairs. Conductor gates those commits before the next
+   check. Later checkers receive earlier findings, rejection reasons, repairs, and gate evidence.
+4. The review agent checks the combined result. `/fix [notes]` asks that reviewer to apply fixes
+   and commit; conductor runs the gate again. Review fixes require your instruction, normally `/fix`.
 
-Known gaps:
+`[flow] feedback_rounds` defaults to the number of feedback agents; `0` skips feedback. Repeated
+names allow rechecks in the same session. A clean verdict or an answer without commits skips
+remaining consecutive rounds for that agent and moves to the next listed agent. If more rounds
+are configured than names, the last agent repeats. `/feedback [agent]` adds a check manually.
 
-- the gate cannot be interrupted
-- a turn that fails on a provider network error stays failed: `/continue` resumes it, nothing
-  retries by itself
-- the planning session's "PLAN.md only" rule is checked after each turn, not enforced (its
-  read-only turns while a task runs are)
-- tool outputs in logs are not shortened
+Agents follow the project's instructions for commits and for moving completed tasks from
+`PLAN.md` to `CHANGELOG.md`. Conductor does not edit those files. Gate output, commit summaries,
+and diffs are posted to Telegram; long outputs are attached as files. Prompts are shown as
+collapsed quotes so you can inspect what the agent received.
 
-A feedback reply without `VERDICT: clean` or `VERDICT: findings` gets one automatic follow-up
-in the same checker session asking for the complete report. This does not consume another
-feedback round. If the follow-up still has no verdict, the task flow pauses without sending
-anything to the implementer or starting review. Use `/continue feedback` to finish the report,
-`/feedback <agent>` for another check, or `/review` to proceed to review. The automatic retry
-budget survives conductor restarts.
+## Commands
 
-## Codex
+| Command | Purpose |
+| --- | --- |
+| `/next [agent] [id]` | Start the next or specified task, with confirmation. |
+| `/review [agent] [id]` | Review the current task or adopt work done outside conductor. |
+| `/fix [notes]` | Apply review fixes in the reviewer session. |
+| `/feedback [agent]` | Run another feedback check. |
+| `/continue [role] [notes]` | Resume a stopped turn or complete a pending report. |
+| `/gate` | Verify the focused implementation/review session's commits and continue the flow. |
+| `/todo [id]` | List Next items or show one in full, without an agent. |
+| `/plan [agent] [topic]` | Start or continue planning. |
+| `/plan done` | Write agreed items and commit `PLAN.md`. |
+| `/chat [new] [agent] <message>` | Start or continue a separate read-only chat. |
+| `/chat stop` | Close that chat; its log stays. |
+| `/summary [role] [agent]` | Ask a fresh read-only session to summarize a session log. |
+| `/status` | Show the task, running/pending work, sessions, and last gate. |
+| `/stop [chat\|plan]` | Interrupt a running agent, chat, or planner. |
+| `/agents` | List configured agents and main role defaults. |
+| `/log` | Export session logs and the current finding summary. |
+| `/help` | Show commands, including configured project commands. |
 
-Install the Codex CLI and run `codex login` as the user running conductor. Add an
-`[agents.codex]` entry to the project's `CONDUCTOR.toml` (see the example), then use
-`/next codex`, `/review codex`, `/chat codex <message>` or select it in `[roles]`.
-Set `model` to a model available to your account; optional `effort` accepts
-`minimal`, `low`, `medium`, `high`, or `xhigh` when supported by that model.
+Roles accepted by `/continue` are `implement`, `feedback`, `review`, and `plan`; `/summary` also
+accepts `chat`. Plain text goes to the focused task session. Reply to an agent's Telegram message
+to reach that session directly. Markdown replies are rendered as Telegram HTML, with plain-text
+fallback; network failures are retried for about three minutes.
 
-The adapter uses `codex exec --json` and resumes the same Codex thread on later turns.
-Bridge transcripts and thread mappings persist beside the state file in `codex/`;
-normal `wlog/` exports include messages, tools and per-turn token totals. Read-only
-turns use the read-only sandbox with escalations denied. Writable turns use workspace-write
-with on-request approvals routed to Codex auto-review, allowing approved Git operations on the
-protected `.git` directory. Denied operations remain blocked. CLI exec cannot relay interactive
-permission prompts to Telegram. Questions in replies can be answered with the next message.
-After a conductor restart, an unfinished turn is marked interrupted; `/continue`
-resumes its thread. Codex background-job notifications are not supported.
+## Planning, chat, and summaries
+
+Planning may read the repository and edit only `PLAN.md`. `/plan done` asks the agent to commit
+that file; conductor shows the changes, warns about other touched files, and offers keep/undo.
+While task work or its gate is running, planning turns are read-only and `/plan done` waits.
+New commits are listed at the next planning turn so the planner can reread the plan. Planning
+survives `/next` and has its own session.
+
+Chat is a separate read-only session that can run alongside task work and also survives `/next`.
+Claude uses plan mode with edit tools refused; opencode uses its `plan` agent; Codex uses the
+read-only sandbox. `/chat new` starts a fresh session. Replies to chat messages reach it, while
+ordinary text keeps going to the task.
+
+Summaries use a fresh read-only session to read an exported log. They use `roles.summary`, default
+to the running session or otherwise the focused session, and do not disturb it. Summary sessions
+are not retained for later conversation.
+
+## Project commands and aliases
+
+Commands in `[commands.<name>]` run when you send them, independently of agent tool calls.
+For example:
+
+```toml
+[commands.serve]
+cmd = "cmake --build build-wasm && exec tools/serve.py"
+description = "rebuild wasm and serve the client"
+background = true
+ready = "open https://"
+aliases = ["server"]
+```
+
+`/serve` and `/server` control the same process; either name accepts `stop`. Aliases appear in
+help but are omitted from the command menu. Text after a command is appended to its shell command.
+
+`confirm = true` adds a confirmation button. One-shot commands wait for agent/gate work to be
+idle and report exit status and output. Background commands return their status when sent again;
+`ready` is an optional output regex used to report readiness, otherwise output is sampled after
+five seconds. Conductor stops process groups on exit and reaps leftover managed processes at
+startup using PID records. Logs and PID records live under `commands/` beside the state file.
+
+## Pending work and recovery
+
+An idle parent session can still have background work. For opencode, conductor checks shell jobs,
+subagents and their descendants, queued inbox work, and completion processing. It waits until
+notifications are delivered and the parent has processed them and become idle again. Foreground
+subagent results can acknowledge completion inline.
+
+The gate, a new task, and another feedback/review session cannot start while this work is pending.
+`/status` names the outstanding work. Conductor rechecks every two seconds without sending model
+prompts. Failed status lookups hold the workflow as unknown; they never imply that work finished.
+`/continue <role>` can send instructions to the same waiting session.
+
+Child IDs, message cursors, and waiting turns persist in state. Startup also rediscovers work
+from opencode's durable transcript. If an unexpected writer resume overlaps another phase,
+automation pauses. After pending work settles, `/gate` verifies the current tree and restarts
+feedback; an older green result does not clear the conflict.
+
+After a restart, opencode turns can still be running and are followed through completion. Claude
+turns are reported as interrupted because their SDK process stops with conductor. Unfinished
+Codex turns are also marked interrupted; `/continue` resumes the saved thread. Codex exec does
+not expose detached-job notifications to this adapter.
+
+## Findings and verification
+
+Conductor appends validation guidance and report contracts even when project prompts are overridden.
+Agents should demonstrate a regression failing without the fix, test real caller paths across
+components, and exercise maximum supported bounds. If a demonstration is impractical, they must
+explain why. These instructions help reviewers assess evidence; a green gate alone does not prove
+test quality.
+
+Conductor owns the full gate after commits. Checkers receive its SHA, commands, result, time, and
+log path, plus whether it still matches the current tree. They should use that evidence and
+focused experiments instead of repeating a green full gate on unchanged code.
+
+Feedback and review return a readable report plus one fenced `conductor-feedback` JSON block:
+
+```conductor-feedback
+{
+  "verdict": "findings",
+  "findings": [{
+    "key": "routing",
+    "category": "bug",
+    "summary": "Prediction is skipped",
+    "location": "client.cpp:234",
+    "evidence": "Late tick 99 completes after part 0 of tick 100"
+  }],
+  "verifications": []
+}
+```
+
+The reply ends with matching `VERDICT: findings` or `VERDICT: clean`. Categories are `bug`,
+`test_gap`, `docs`, and `process`. Conductor assigns IDs such as `0169-F01`. `relatedTo` links a
+coverage gap to its bug; `duplicateOf` identifies a repeated finding. Both can reference a local
+key or an existing ID. A clean report has no new, reopened, or unresolved actionable findings.
+
+The implementer, or reviewer answering `/fix`, records a disposition for every requested ID:
+
+```conductor-dispositions
+{
+  "dispositions": [{
+    "id": "0169-F01",
+    "status": "fixed",
+    "reason": "Changed routing; the regression fails without the fix"
+  }]
+}
+```
+
+Dispositions are `fixed`, `rejected`, or `deferred`, with reasons. Fixed claims are linked to actual
+repair commits. A later checker separately assesses them in `verifications`, using `id`, `status`
+(`verified`, `open`, or `accepted_rejection`), and `reason`. Verification requires a different
+session and a SHA containing the fixing commits. A clean verdict alone does not verify repairs;
+fixes made through `/fix` remain pending verification until another review checks them.
+
+Malformed or incomplete reports get one correction turn, then pause. Partial JSON is not applied;
+the raw reply remains recorded as pending. Retry budgets survive restarts. Use `/continue feedback`,
+`/continue implement`, or `/continue review` to finish the corresponding report. `/gate` cannot
+advance while dispositions are incomplete.
+
+## Logs, usage, and state
+
+The local `state` setting defaults to `state/state.json` beside conductor's config. Keep that state
+directory to resume sessions and preserve finding history. Related directories such as `findings/`,
+`codex/`, and `commands/` are stored beside the state file.
+
+Project logs default to `wlog/`, configurable through `[logs] dir`:
+
+| File | Contents |
+| --- | --- |
+| `<task>-<tag>.md` | Implementation transcript. |
+| `<task>-feedback-<tag>.md` | Feedback transcript. |
+| `<task>-review[-plan]-<tag>.md` | Review and fixes; `-plan` when review also touched `PLAN.md`. |
+| `<task>-plan-<tag>.md`, `<task>-chat-<tag>.md` | Planning and chat transcripts. |
+| `<log-basename>.usage.json` | Exact token counters and measurement provenance. |
+| `<task>-findings.md` | Ledger summary, reports, session links, and checker outcome counts. |
+| `<task>-gate.log` | Gate history, including SHA, commands, result, duration, and full output. |
+
+Planning/chat names without a current task use a date; names are tied to the task when the session
+opens. New planning/chat sessions get numeric suffixes if a filename is already taken.
+
+The canonical ledger is `findings/<task>.json` beside conductor's state file. It preserves source
+model/role/session/SHA, stable finding IDs, relationships, dispositions, repair commits, and
+verification history. Markdown summaries are regenerated from it, including by `/log`. Related test
+gaps and duplicates are counted separately from defect groups. Historical logs are not backfilled.
+
+Markdown token totals are rounded. `.usage.json` preserves exact reported counts and turn indices;
+`unmeteredTurns` marks missing usage data. Cached input is separate from uncached input, and output
+includes reasoning where reported by the harness. Codex supplies aggregate turn usage, so its
+model-step count and maximum single-request context are unavailable (`null` in JSON). Old saved
+Codex sessions receive this correction when resumed. Historical Markdown is not automatically
+rewritten.
+
+## Codex permissions
+
+Read-only turns deny escalation. Writable turns use the workspace-write sandbox with on-request
+approvals routed through Codex's automatic approval reviewer. This allows approved Git operations
+on the protected `.git` directory while keeping denied operations blocked. Exec cannot relay
+interactive permission prompts to Telegram; questions in agent replies can be answered next turn.
+
+## Checks and current limits
+
+```sh
+npm run check  # TypeScript
+npm test       # Node test runner
+```
+
+Conductor is a prototype used for bane's development. Current limits include:
+
+- The verification gate cannot be interrupted through `/stop`.
+- Provider failures require `/continue`; they are not retried automatically. Report-format
+  correction retries and pending-work status rechecks are separate mechanisms.
+- The planner's `PLAN.md`-only write rule is checked after the turn rather than enforced as a
+  file-specific permission boundary. Planning during task work is read-only.
+- Tool output in exported transcripts is not shortened.
+- Pending subagent/inbox inspection currently depends on opencode's v2 API; other adapters do not
+  expose the same detached-work lifecycle.

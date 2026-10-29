@@ -30,11 +30,28 @@ export interface Asker {
     question(q: Question): Promise<string>;
 }
 
+export interface PendingWork {
+    kind: 'shell' | 'subagent' | 'session' | 'inbox';
+    id?: string;
+    description: string;
+}
+
+export interface PendingWorkState {
+    sessions: Record<string, {
+        assistantCursor?: string;
+        syntheticCursor?: string;
+        children: { id: string; toolId: string; description: string; launchedAt: number; returnedAt?: number }[];
+        notifications: Record<string, { id: string; created: number }>;
+    }>;
+}
+
 export interface SessionOptions {
     title: string;
     cwd: string;
     asker: Asker;
     readOnly?: boolean;
+    pendingWorkState?: PendingWorkState;
+    savePendingWork?: (id: string, state: PendingWorkState) => void;
 }
 
 export interface AgentSession {
@@ -46,8 +63,8 @@ export interface AgentSession {
     transcript(): Promise<Transcript | undefined>;
     // For a turn begun at `since` (ms) whose end the conductor missed, e.g. across a restart.
     turnState(since: number): Promise<TurnState>;
-    // Commands of the session's background jobs still running; the harness resumes the session when one exits.
-    backgroundJobs(): Promise<string[]>;
+    // Includes child sessions and completion notifications the parent has not processed.
+    pendingWork(): Promise<PendingWork[]>;
     // Applies from the next turn on.
     setReadOnly(on: boolean): Promise<void>;
 }
