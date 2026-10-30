@@ -22,6 +22,7 @@ export interface SessionRef {
     dispositionRetried?: boolean;
     dispositionPending?: boolean;
     pendingWorkState?: PendingWorkState;
+    skipRequested?: boolean;
     workWait?: { since: number; result: TurnResult; readOnly: boolean; gateAttempt: number; detail: string };
     // set while a turn runs, so a restart can tell how it ended
     turn?: { since: number; doing: string; gateAttempt?: number };
@@ -47,6 +48,7 @@ export interface State {
     planTopic?: string;
     // feedback checks run for the current task, and whether the implementer is answering one
     feedbackRound?: number;
+    feedbackSkips?: { task: string; agent: string; round: number; at: string; logFile?: string }[];
     feedbackFixing?: boolean;
     // Persist the retry budget across restarts and failed retry turns.
     feedbackReportRetried?: boolean;

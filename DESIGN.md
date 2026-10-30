@@ -128,6 +128,10 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
 - `/review [agent] [id]`, `/fix [notes]`, `/feedback [agent]`: as above, for the current task
   (`/review <id>` also takes a task done outside the conductor)
 - `/continue [role] [notes]`: resume a turn that stopped early (an error, `/stop`, a restart)
+- `/skip`: interrupt and skip the current feedback step, then run the next checker or final
+  review once pending work settles. The request survives restarts; completed skips are recorded
+  in state and subsequent checker prompts. It cannot bypass implementation, pending repair
+  dispositions, final review or the pending-work barrier.
 - `/gate`: run the gate on the current session's commits by hand, then continue as after a turn
 - `/todo [id]`: list the `PLAN.md` "Next" items, or show one in full
 - `/plan [agent] [topic]`, `/plan done`: a planning discussion (see below)

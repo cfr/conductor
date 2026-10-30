@@ -266,6 +266,11 @@ export class Chat implements Messenger {
     }
 
     async sendFile(name: string, content: string, caption?: string, route?: string) {
+        if (content.length === 0) {
+            const note = name.endsWith('.diff') ? `${name}: no file changes` : `${name}: file is empty`;
+            await this.send([caption, note].filter(Boolean).join('\n'), route);
+            return;
+        }
         const msg = await this.bot.api.sendDocument(
             this.userId,
             new InputFile(Buffer.from(content, 'utf8'), name),

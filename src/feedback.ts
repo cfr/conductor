@@ -66,6 +66,9 @@ export class FeedbackTracker {
                   : 'SHA, worktree, or gate commands differ/are unknown; do not assume it covers this tree.'}`
             : 'No conductor gate result recorded.';
         const extra = [text, '\nValidation and verification ownership:', validationGuidance, `Conductor gate: ${gateText}`];
+        const skipped = state.feedbackSkips?.filter((s) => s.task === state.task?.id);
+        if (skipped?.length) extra.push('Feedback steps skipped by user request (not clean checks):\n' +
+            skipped.map((s) => `round ${s.round}: ${s.agent} at ${s.at}`).join('\n'));
         if (role === 'implement') {
             extra.push('Before the first implementation commit, identify the modes and lifecycle transitions ' +
                 'affected by the change. Test their meaningful combinations through the real caller/entry ' +

@@ -27,6 +27,8 @@ interface Harness {
     shutdown(): Promise<void>;
     announce(): Promise<void>;
     stop(args?: string): Promise<void>;
+    skipFeedback(): Promise<void>;
+    runFeedback(agent: string): Promise<void>;
     unsolicited(id: string, event: { phase: 'started' }): Promise<void>;
 }
 const feedback = (findings: unknown[], verifications: unknown[] = [], verdict = findings.length ? 'findings' : 'clean') =>
@@ -471,5 +473,108 @@ test('stop reaches an idle session waiting on shell jobs and prevents automatic 
         assert.equal(existsSync(join(f.project, 'gate-count')), false);
         assert.equal(f.prompts.length, 0);
         assert.ok(f.sent.some((s) => s.includes('turn interrupted')));
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('skip interrupts active feedback, waits for pending work across restart, and advances once', async () => {
+    const f = setup([feedback([]), feedback([]), feedback([])]);
+    const create = f.adapter.create.bind(f.adapter);
+    let pending = true;
+    let release!: () => void;
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const ended = new Promise<void>((resolve) => { release = resolve; });
+    let checker: AgentSession | undefined;
+    let restored: Harness | undefined;
+    f.adapter.create = async (agent, opts) => {
+        const session = await create(agent, opts);
+        if (agent.name === 'ds') {
+            checker = session;
+            const send = session.send.bind(session);
+            session.send = async (text) => {
+                await send(text);
+                ready();
+                await ended;
+                return { outcome: 'interrupted', text: 'Partial report' };
+            };
+            session.interrupt = async () => { release(); };
+            session.pendingWork = async () => pending ? [{ kind: 'shell', id: 'job', description: 'review experiment' }] : [];
+        }
+        return session;
+    };
+    try {
+        const turn = f.h.runFeedback('ds');
+        await started;
+        await f.h.skipFeedback();
+        await turn;
+        assert.deepEqual(f.prompts.map((p) => p.agent), ['ds']);
+        assert.equal(f.store.state.sessions.feedback!.skipRequested, true);
+        assert.ok(f.store.state.sessions.feedback!.workWait);
+        await f.h.skipFeedback();
+        assert.ok(f.sent.some((s) => s.includes('already requested')));
+        await f.h.shutdown();
+        const store = new Store(f.local.stateFile);
+        restored = new Conductor(f.local, store, f.chat) as unknown as Harness;
+        restored.adapters = { codex: f.adapter, opencode: f.adapter, claude: f.adapter };
+        restored.live.set('feedback', checker!);
+        pending = false;
+        await restored.drainWork();
+        await restored.drainWork();
+        assert.deepEqual(f.prompts.map((p) => p.agent), ['ds', 'glm', 'mm', 'sol']);
+        assert.equal(store.state.feedbackSkips!.length, 1);
+        assert.equal(store.state.feedbackSkips![0].agent, 'ds');
+        assert.equal(store.state.feedbackSkips![0].round, 1);
+        assert.ok(f.prompts.slice(1).every((p) => p.text.includes('not clean checks')));
+        assert.equal(new FindingStore(join(f.dir, 'state', 'findings')).read('0170-task').reports.some((r) => r.source.agent === 'ds'), false);
+    } finally { release(); await f.h.shutdown(); await restored?.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('skip of the final paused checker goes to final review without running implementation', async () => {
+    const f = setup([]);
+    const impl = f.h.live.get('implement')!;
+    try {
+        f.store.state.sessions.feedback = { id: impl.id, agent: 'mm', title: 'Paused feedback', startSha: f.git('rev-parse', 'HEAD') };
+        f.store.state.focus = 'feedback';
+        f.store.state.feedbackRound = 3;
+        f.h.live.set('feedback', impl);
+        await f.h.skipFeedback();
+        assert.deepEqual(f.prompts.map((p) => p.agent), ['sol']);
+        assert.equal(f.store.state.feedbackSkips![0].agent, 'mm');
+        assert.equal(f.store.state.sessions.feedback!.skipRequested, undefined);
+        await f.h.skipFeedback();
+        assert.equal(f.store.state.feedbackSkips!.length, 1);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('skip cannot bypass implementation or pending feedback repair dispositions', async () => {
+    const f = setup([]);
+    try {
+        await f.h.skipFeedback();
+        assert.equal(f.prompts.length, 0);
+        f.store.state.sessions.feedback = { id: 'checker', agent: 'ds', title: 'Feedback', startSha: f.git('rev-parse', 'HEAD') };
+        f.store.state.focus = 'feedback';
+        f.store.state.feedbackDispositionPending = true;
+        await f.h.skipFeedback();
+        assert.equal(f.prompts.length, 0);
+        assert.equal(f.store.state.sessions.feedback.skipRequested, undefined);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('skip consumes exactly one round when the next round uses the same checker', async () => {
+    const f = setup([feedback([]), feedback([])]);
+    try {
+        const config = join(f.project, 'CONDUCTOR.toml');
+        writeFileSync(config, readFileSync(config, 'utf8').replace('["ds", "glm", "mm"]', '["ds", "ds", "mm"]'));
+        const ds = await f.adapter.create({ name: 'ds', model: 'test-ds', tag: 'ds', harness: 'codex' },
+            { title: '0170-task feedback', cwd: f.project, asker: { permission: async () => 'reject', question: async () => '' } });
+        f.h.live.set('feedback', ds);
+        f.store.state.sessions.feedback = { id: ds.id, agent: 'ds', title: '0170-task feedback', startSha: f.git('rev-parse', 'HEAD') };
+        f.store.state.focus = 'feedback';
+        f.store.state.feedbackRound = 1;
+        await f.h.skipFeedback();
+        assert.deepEqual(f.prompts.map((p) => p.agent), ['ds', 'mm', 'sol']);
+        assert.ok(f.prompts[0].text.startsWith('Custom checker prompt'));
+        assert.equal(f.store.state.feedbackSkips!.length, 1);
+        assert.equal(f.store.state.feedbackSkips![0].round, 1);
     } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
 });

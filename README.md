@@ -120,6 +120,7 @@ collapsed quotes so you can inspect what the agent received.
 | `/review [agent] [id]` | Review the current task or adopt work done outside conductor. |
 | `/fix [notes]` | Apply review fixes in the reviewer session. |
 | `/feedback [agent]` | Run another feedback check. |
+| `/skip` | Skip the current feedback checker and continue to the next checker or final review. |
 | `/continue [role] [notes]` | Resume a stopped turn or complete a pending report. |
 | `/gate` | Verify the focused implementation/review session's commits and continue the flow. |
 | `/todo [id]` | List Next items or show one in full, without an agent. |
@@ -190,6 +191,11 @@ The gate, a new task, and another feedback/review session cannot start while thi
 `/status` names the outstanding work. Conductor rechecks every two seconds without sending model
 prompts. Failed status lookups hold the workflow as unknown; they never imply that work finished.
 `/continue <role>` can send instructions to the same waiting session.
+
+`/skip` interrupts the current feedback checker, waits for its pending work to settle, and
+advances exactly one feedback step. It also works on a stopped or incomplete feedback report.
+Implementation, pending repair dispositions and final review cannot be skipped. Skips persist
+in state and appear in `/status` and later checker prompts as skipped, never as clean checks.
 
 `/stop` also reaches an idle agent waiting on background work. For opencode it interrupts the
 parent, terminates its owned shell jobs (including jobs from discovered descendants), then

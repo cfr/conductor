@@ -32,6 +32,7 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /review [agent] [id] - review the current task (or a task done outside the conductor)
 /fix [notes] - reviewer applies fixes and commits
 /feedback [agent] - run a feedback check of the current task now (one more round)
+/skip - skip the current feedback step and continue to the next checker or review
 /continue [role] [notes] - resume a turn that stopped early (error, /stop, restart)
 /gate - run the gate on the current session's commits now, then continue as after a turn
 /todo [id] - list PLAN.md "Next" items (or show one in full)
@@ -94,6 +95,7 @@ export class Conductor {
         chat.command('review', (a) => this.review(a));
         chat.command('fix', (a) => this.fix(a));
         chat.command('feedback', (a) => this.feedbackCommand(a));
+        chat.command('skip', () => this.skipFeedback());
         chat.command('continue', (a) => this.continueTurn(a));
         chat.command('gate', () => this.gateCommand());
         chat.command('plan', (a) => this.plan(a));
@@ -538,7 +540,53 @@ export class Conductor {
         await this.runFeedback(name);
     }
 
-    private async runFeedback(agentName: string) {
+    private async skipFeedback() {
+        this.reload();
+        const ref = this.state.sessions.feedback;
+        if (!ref || this.state.focus !== 'feedback' || this.state.feedbackDispositionPending) {
+            await this.chat.send('no current feedback step to skip; implementation, repairs and final review cannot be skipped');
+            return;
+        }
+        if (this.state.workConflict || (this.busy && this.busy !== 'feedback') ||
+            (this.waitingRole() && this.waitingRole() !== 'feedback')) {
+            throw new Error('other work is running or unresolved; wait before skipping feedback');
+        }
+        if (ref.skipRequested) {
+            await this.chat.send('feedback skip already requested; waiting for its work to stop');
+            return;
+        }
+        ref.skipRequested = true;
+        this.store.save();
+        this.stoppingWork++;
+        try {
+            await this.chat.send(`skipping feedback by ${this.agent(ref.agent).tag}; stopping its work first`);
+            await this.interruptSession('feedback');
+        } finally {
+            this.stoppingWork--;
+        }
+        if (this.state.sessions.feedback !== ref || this.busy === 'feedback') return;
+        const result: TurnResult = { outcome: 'interrupted', text: await this.session('feedback').lastReply() };
+        const settled = await this.settle('feedback', result, false, false);
+        if (!settled.waiting) await this.afterTurn('feedback', result, undefined, 0);
+    }
+
+    private async finishFeedbackSkip() {
+        const ref = this.state.sessions.feedback!;
+        if (!ref.skipRequested) return;
+        const round = this.state.feedbackRound ?? 0;
+        this.state.feedbackSkips ??= [];
+        this.state.feedbackSkips.push({ task: this.state.task!.id, agent: ref.agent, round,
+            at: new Date().toISOString(), logFile: ref.logFile });
+        ref.skipRequested = undefined;
+        this.state.feedbackReportRetried = undefined;
+        this.store.save();
+        const next = this.nextFeedbackAgent();
+        await this.chat.send(`feedback step ${round} skipped by request; ${next ? `next check by ${this.agent(next).tag}` : 'on to the review'}`);
+        if (next) await this.runFeedback(next, true);
+        else await this.startReview(this.project.roles.review);
+    }
+
+    private async runFeedback(agentName: string, freshPrompt = false) {
         this.requireSettledWork();
         const task = this.state.task!;
         const round = (this.state.feedbackRound ?? 0) + 1;
@@ -549,6 +597,8 @@ export class Conductor {
             if (first) {
                 this.live.delete('feedback');
                 await this.createSession('feedback', agentName, `${task.id} feedback`);
+                text = fill(this.project.prompts.feedback, this.vars());
+            } else if (freshPrompt) {
                 text = fill(this.project.prompts.feedback, this.vars());
             } else {
                 const reply = await this.session('implement').lastReply();
@@ -1100,6 +1150,10 @@ export class Conductor {
                 await this.chat.send(`${this.state.workConflict}; feedback is stale. Wait for pending work, then /gate.`);
                 return;
             }
+            if (this.state.sessions.feedback?.skipRequested) {
+                await this.finishFeedbackSkip();
+                return;
+            }
             if (r.outcome === 'succeeded') {
                 await this.afterFeedback(r.text);
             }
@@ -1223,6 +1277,7 @@ export class Conductor {
         try {
             const work = await this.session(role).pendingWork();
             detail = work.map((w) => `  ${w.kind}: ${w.description.split('\n')[0].slice(0, 160)}`).join('\n');
+            if (this.stoppingWork && this.state.sessions[role]?.skipRequested) detail ||= 'stopping skipped feedback';
         } catch (e) {
             detail = `pending-work status unknown: ${describeError(e)}`;
         }
@@ -1241,7 +1296,9 @@ export class Conductor {
             this.store.save();
         }
         if (r.outcome !== 'succeeded') {
-            await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}; /continue to resume it`, role);
+            if (!this.state.sessions[role]?.skipRequested) {
+                await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}; /continue to resume it`, role);
+            }
             return { waiting: false };
         }
         if (readOnly) {
@@ -1327,6 +1384,7 @@ export class Conductor {
             const st = await session.turnState(wait.since);
             if (st.running) return;
             const work = await session.pendingWork();
+            if (this.stoppingWork) return;
             if (work.length) {
                 const detail = work.map((w) => `${w.kind}: ${w.description.split('\n')[0].slice(0, 160)}`).join('\n');
                 if (wait.detail !== detail) {
@@ -1581,6 +1639,8 @@ export class Conductor {
             `running: ${escapeHtml(this.runningTask() ?? 'nothing')}${this.planBusy ? ' (plan answering)' : ''}${this.chat.pendingQuestions() ? ` (${this.chat.pendingQuestions()} question(s) waiting)` : ''}`,
             `focus: ${s.focus ?? '-'}${this.chatBusy ? ' (chat answering)' : ''}`,
             ...(s.workConflict ? [`verification required: ${escapeHtml(s.workConflict)}`] : []),
+            ...(s.feedbackSkips?.filter((skip) => skip.task === s.task?.id)
+                .map((skip) => `skipped feedback: round ${skip.round}, ${escapeHtml(skip.agent)} (${skip.at})`) ?? []),
         ];
         for (const [role, ref] of Object.entries(s.sessions)) {
             lines.push(`${role}: ${this.agent(ref.agent).tag} ${ref.id}${ref.workWait ? `\n  pending: ${escapeHtml(ref.workWait.detail)}` : ''}${ref.logFile ? `\n  log ${code(ref.logFile)}` : ''}`);
