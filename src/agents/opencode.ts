@@ -262,13 +262,15 @@ class OpencodeSession implements AgentSession {
     }
 
     async send(text: string): Promise<TurnResult> {
+        const prompt = await this.work.preparePrompt(text);
         const since = Date.now();
         const end = this.oc.waitForEnd(this.id, since);
         const sent = await this.oc.api<{ data: { id: string } }>(
             'POST',
             `/api/session/${this.id}/prompt`,
-            { text },
+            { text: prompt.text },
         );
+        this.work.promptDelivered(prompt, sent.data.id);
         const r = await end;
         return { ...r, text: await this.replyAfter(sent.data.id) };
     }
@@ -322,7 +324,7 @@ class OpencodeSession implements AgentSession {
         }
         const last = await this.oc.api<{ data: { type: string; error?: { message?: string } }[] }>(
             'GET',
-            `/api/session/${this.id}/message?order=desc&limit=1`,
+            `/api/session/${this.id}/message?type=assistant&order=desc&limit=1`,
         );
         const outcome = (s.data.outcome ?? 'failed') as TurnResult['outcome'];
         return { running: false, outcome, error: last.data[0]?.error?.message };

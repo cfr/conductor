@@ -7,6 +7,7 @@ import type { Adapter, AgentSession, Asker, Question, TurnResult, TurnState, Uns
 import {
     fill,
     loadProjectConfig,
+    parseProjectConfig,
     type AgentConfig,
     type LocalConfig,
     type ProjectCommand,
@@ -23,6 +24,7 @@ import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
 import type { SessionRef, State, Store } from './state.ts';
 import { describeError, type Messenger } from './telegram.ts';
+import { defaultRoles, editRoleDefaults } from './roles.ts';
 
 type Busy = Role | 'gate' | `/${string}` | null;
 
@@ -41,7 +43,9 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /chat stop - close the chat session (its log stays)
 /summary [role] [agent] - an agent reads the running (or focused) session's log and sums it up
 /plan done - write the agreed items, then commit / keep / discard
-/agents - configured agents and role defaults
+/agents - configured agent aliases and models
+/roles [role agents...] - show defaults or edit them while no task is in progress
+/agent <alias> - hand off the current task's focused role; /continue to resume
 /status - current task, step, sessions, last gate
 /stop [chat] - interrupt the running agent (or the chat)
 /log - export session logs now
@@ -102,7 +106,9 @@ export class Conductor {
         chat.command('todo', (a) => this.todo(a));
         chat.command('chat', (a) => this.chatCommand(a));
         chat.command('summary', (a) => this.summary(a));
-        chat.command('agents', async () => chat.send(this.agentList()));
+        chat.command('agents', async () => { this.reload(); await chat.send(this.agentList()); });
+        chat.command('roles', (a) => this.rolesCommand(a));
+        chat.command('agent', (a) => this.agentCommand(a));
         chat.command('status', async () => chat.sendHtml(this.status()));
         chat.command('stop', (a) => this.stop(a));
         chat.command('log', () => this.exportAll());
@@ -406,6 +412,7 @@ export class Conductor {
             }
             this.dropTaskSessions();
             this.state.task = item;
+            this.state.taskComplete = false;
             this.state.sessions = this.keepSideSessions();
             this.state.focus = 'implement';
             this.state.lastGate = undefined;
@@ -462,6 +469,7 @@ export class Conductor {
         const fullId = found?.id ?? (id.includes('-') ? id : this.findLoggedId(idNumber(id))) ?? id;
         this.dropTaskSessions();
         this.state.task = found ?? { id: fullId, number: idNumber(id), text: '(done outside the conductor)' };
+        this.state.taskComplete = false;
         this.state.sessions = this.keepSideSessions();
         this.state.lastGate = undefined;
         this.state.feedbackRound = undefined;
@@ -508,9 +516,11 @@ export class Conductor {
 
     // Nothing to recheck: the current agent's remaining rounds are skipped and the next listed agent checks afresh.
     private async afterSettledCheck(why: string) {
-        const current = this.state.sessions.feedback?.agent;
+        const ref = this.state.sessions.feedback;
+        const current = ref?.agent;
+        const overridden = ref?.overrideRound !== undefined && ref.overrideRound === this.state.feedbackRound;
         let done = this.state.feedbackRound ?? 0;
-        while (done < this.project.feedbackRounds && this.feedbackAgentAt(done) === current) {
+        while (!overridden && done < this.project.feedbackRounds && this.feedbackAgentAt(done) === current) {
             done++;
         }
         const next = this.feedbackAgentAt(done);
@@ -518,7 +528,7 @@ export class Conductor {
             this.state.feedbackRound = done;
             this.store.save();
             await this.chat.send(`${why}; next check by ${this.agent(next).tag}`);
-            await this.runFeedback(next);
+            await this.runFeedback(next, overridden);
             return;
         }
         await this.chat.send(`${why}; on to the review`);
@@ -555,6 +565,7 @@ export class Conductor {
             await this.chat.send('feedback skip already requested; waiting for its work to stop');
             return;
         }
+        if (ref.swapRequested) throw new Error('an agent handoff is pending; wait before skipping feedback');
         ref.skipRequested = true;
         this.store.save();
         this.stoppingWork++;
@@ -605,6 +616,8 @@ export class Conductor {
                 text = fill(this.project.prompts.feedbackAgain, this.vars({ reply }));
             }
             this.state.sessions.feedback!.checkedSha = await repo.head(this.project.root);
+            this.state.sessions.feedback!.originalAgent = undefined;
+            this.state.sessions.feedback!.overrideRound = undefined;
             this.state.feedbackRound = round;
             this.state.feedbackReportRetried = undefined;
             this.state.sessions.feedback!.trackedFindings = true;
@@ -639,7 +652,7 @@ export class Conductor {
                 this.store.save();
                 await this.chat.send(
                     `feedback: incomplete report after one retry${invalid ? ` (${invalid})` : ': no VERDICT'}; task flow paused. ` +
-                    'Use /continue feedback to finish the report, /feedback <agent> for another check, ' +
+                    'Use /continue feedback to finish the report, /skip to skip this feedback step, /feedback <agent> for another check, ' +
                     'or /review to proceed to review.',
                 );
                 return;
@@ -698,6 +711,7 @@ export class Conductor {
             ref.findingIds = receipt.findingIds;
             ref.expectReport = undefined;
             ref.reportRetried = undefined;
+            this.state.taskComplete = receipt.findingIds.length === 0;
             this.store.save();
             return;
         }
@@ -720,6 +734,7 @@ export class Conductor {
             await this.createSession('review', agentName, `${task.id} review`);
             this.state.sessions.review!.trackedFindings = true;
             this.state.sessions.review!.expectReport = true;
+            this.state.taskComplete = false;
             this.state.focus = 'review';
             this.store.save();
         } finally {
@@ -747,6 +762,7 @@ export class Conductor {
             return;
         }
         if (this.busy) throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
+        this.state.taskComplete = false;
         const ref = this.state.sessions.review;
         if (ref.findingIds?.length) {
             ref.fixBase = await repo.head(this.project.root);
@@ -1051,6 +1067,9 @@ export class Conductor {
     }
 
     private async turn(role: Role, text: string, doing: string, gateAttempt = 0, quote = true) {
+        if (this.state.sessions[role]?.swapRequested) throw new Error('agent handoff is pending; wait before sending another turn');
+        const handoff = this.state.sessions[role]?.handoff;
+        if (handoff) text = `${handoff}\n\nNext instruction:\n${text}`;
         if (role === 'plan') {
             await this.planTurn(text, doing, quote);
             return;
@@ -1068,6 +1087,7 @@ export class Conductor {
                 await (quote ? this.chat.sendQuoted(head, text, role) : this.chat.send(head, role));
                 this.markTurn(role, { since: Date.now(), doing, gateAttempt });
                 r = await this.session(role).send(text);
+                if (handoff) { this.state.sessions[role]!.handoff = undefined; this.store.save(); }
                 settled = await this.settle(role, r);
             } finally {
                 this.markTurn(role, undefined);
@@ -1131,6 +1151,7 @@ export class Conductor {
             const session = this.session('plan');
             await session.setReadOnly(running !== undefined);
             r = await session.send(message);
+            ref.handoff = undefined;
             settled = await this.settle('plan', r, running !== undefined);
         } finally {
             this.markTurn('plan', undefined);
@@ -1145,6 +1166,10 @@ export class Conductor {
     }
 
     private async afterTurn(role: Role, r: TurnResult, gateFrom: string | undefined, gateAttempt: number) {
+        if (this.state.sessions[role]?.swapRequested) {
+            await this.finishAgentSwap(role);
+            return;
+        }
         if (role === 'feedback') {
             if (this.state.workConflict) {
                 await this.chat.send(`${this.state.workConflict}; feedback is stale. Wait for pending work, then /gate.`);
@@ -1215,8 +1240,19 @@ export class Conductor {
         const ref = this.state.sessions[role];
         if (ref && (turn || ref.turn)) {
             ref.turn = turn;
+            if (turn) ref.failureNotice = undefined;
             this.store.save();
         }
+    }
+
+    private async notifyTurnFailure(role: Role, result: Pick<TurnResult, 'outcome' | 'error'>) {
+        const ref = this.state.sessions[role];
+        if (!ref || result.outcome === 'succeeded' || ref.skipRequested || ref.swapRequested) return;
+        const notice = `turn ${result.outcome}${result.error ? `: ${result.error}` : ''}`;
+        if (ref.failureNotice === notice) return;
+        await this.chat.send(`${this.prefix(role)} ${notice}; /continue ${role} to resume it`, role);
+        ref.failureNotice = notice;
+        this.store.save();
     }
 
     private async recoverPendingWork() {
@@ -1273,11 +1309,14 @@ export class Conductor {
         if (r.text && postReply) {
             await this.chat.sendMarkdown(p, r.text, role);
         }
+        await this.notifyTurnFailure(role, r);
         let detail: string;
         try {
-            const work = await this.session(role).pendingWork();
+            const ref = this.state.sessions[role]!;
+            const allWork = await this.session(role).pendingWork();
+            const work = ref.swapRequested ? allWork.filter((w) => w.kind !== 'subagent' || !w.terminal) : allWork;
             detail = work.map((w) => `  ${w.kind}: ${w.description.split('\n')[0].slice(0, 160)}`).join('\n');
-            if (this.stoppingWork && this.state.sessions[role]?.skipRequested) detail ||= 'stopping skipped feedback';
+            if (this.stoppingWork && (ref.skipRequested || ref.swapRequested)) detail ||= 'stopping session work';
         } catch (e) {
             detail = `pending-work status unknown: ${describeError(e)}`;
         }
@@ -1295,10 +1334,8 @@ export class Conductor {
             delete this.state.sessions[role]!.workWait;
             this.store.save();
         }
+        if (this.state.sessions[role]?.swapRequested) return { waiting: false };
         if (r.outcome !== 'succeeded') {
-            if (!this.state.sessions[role]?.skipRequested) {
-                await this.chat.send(`${p} turn ${r.outcome}${r.error ? `: ${r.error}` : ''}; /continue to resume it`, role);
-            }
             return { waiting: false };
         }
         if (readOnly) {
@@ -1324,6 +1361,19 @@ export class Conductor {
             (r) => this.state.sessions[r]?.id === sessionId,
         );
         if (!found) {
+            const retired = this.state.archivedSessions?.find((s) => s.ref.id === sessionId);
+            if (retired && ev.phase === 'started') {
+                this.state.workConflict = `retired ${retired.role} session ${sessionId} resumed after handoff`;
+                this.state.taskComplete = false;
+                this.store.save();
+                const agent = this.agent(retired.ref.agent);
+                const session = this.adapters[agent.harness].resume(agent, sessionId, {
+                    title: retired.ref.title, cwd: this.project.root, asker: this.asker(retired.role),
+                    pendingWorkState: retired.ref.pendingWorkState,
+                });
+                await session.interrupt();
+                await this.chat.send(`${this.state.workConflict}; stopped it. /gate to verify the current tree before advancing.`);
+            }
             return;
         }
         if (found === 'chat') {
@@ -1383,7 +1433,11 @@ export class Conductor {
             const session = this.session(role);
             const st = await session.turnState(wait.since);
             if (st.running) return;
-            const work = await session.pendingWork();
+            await this.notifyTurnFailure(role, { outcome: st.outcome,
+                error: st.error ?? (wait.result.outcome === st.outcome ? wait.result.error : undefined) });
+            const allWork = await session.pendingWork();
+            const work = this.state.sessions[role]?.swapRequested
+                ? allWork.filter((w) => w.kind !== 'subagent' || !w.terminal) : allWork;
             if (this.stoppingWork) return;
             if (work.length) {
                 const detail = work.map((w) => `${w.kind}: ${w.description.split('\n')[0].slice(0, 160)}`).join('\n');
@@ -1515,6 +1569,7 @@ export class Conductor {
             ref.fixingFindings = undefined;
             ref.dispositionPending = undefined;
             ref.findingIds = undefined;
+            this.state.taskComplete = true;
             this.store.save();
             await this.chat.send(`${task?.id ?? 'task'} done; /next when ready`);
         }
@@ -1522,17 +1577,18 @@ export class Conductor {
 
     private logName(role: SessionRole, ref: SessionRef, planTouched: boolean): string {
         const tag = this.agent(ref.agent).tag;
+        const suffix = ref.logSequence ? `-session-${ref.logSequence}` : '';
         if (role === 'chat' || role === 'plan') {
-            return `${ref.title}-${tag}.md`;
+            return `${ref.title}-${tag}${suffix}.md`;
         }
         const id = this.state.task?.id ?? ref.title;
         if (role === 'implement') {
-            return `${id}-${tag}.md`;
+            return `${id}-${tag}${suffix}.md`;
         }
         if (role === 'feedback') {
-            return `${id}-feedback-${tag}.md`;
+            return `${id}-feedback-${tag}${suffix}.md`;
         }
-        return `${id}-review${planTouched ? '-plan' : ''}-${tag}.md`;
+        return `${id}-review${planTouched ? '-plan' : ''}-${tag}${suffix}.md`;
     }
 
     private async exportLog(role: SessionRole) {
@@ -1620,14 +1676,176 @@ export class Conductor {
         }
     }
 
+    private taskInProgress(): boolean {
+        if (!this.state.task || this.state.taskComplete) return false;
+        const review = this.state.sessions.review;
+        // Older state files predate the explicit completion flag.
+        if (this.state.taskComplete === undefined && review?.trackedFindings && !review.expectReport &&
+            !review.reportRetried && !review.findingIds?.length && !review.fixingFindings &&
+            !review.dispositionPending && this.state.focus === 'review') return false;
+        return true;
+    }
+
+    private roleList(): string {
+        const lines = ['Defaults:', ...defaultRoles.map((role) => {
+            const value = this.project.roles[role];
+            return `  ${role}: ${Array.isArray(value) ? value.join(' ') || '(none)' : value}`;
+        })];
+        if (this.taskInProgress()) {
+            lines.push('', `Current task: ${this.state.task!.id}`);
+            for (const role of roles as Role[]) {
+                const ref = this.state.sessions[role];
+                if (!ref) continue;
+                const assignment = ref.originalAgent && ref.originalAgent !== ref.agent
+                    ? `${ref.originalAgent} -> ${ref.agent}` : ref.agent;
+                const round = role === 'feedback' ? `${this.state.feedbackRound ?? 0}/${this.project.feedbackRounds} — ` : '';
+                lines.push(`  ${role}: ${round}${assignment}${ref.swapRequested ? ` (handoff to ${ref.swapRequested} pending)` : ''}`);
+            }
+        }
+        return lines.join('\n');
+    }
+
+    private async rolesCommand(args: string) {
+        this.reload();
+        const [role, ...names] = args.trim().split(/\s+/).filter(Boolean);
+        if (!role) { await this.chat.send(this.roleList()); return; }
+        if (this.taskInProgress() || this.runningTask() || this.planBusy || this.chatBusy || this.summaryBusy ||
+            Object.values(this.state.sessions).some((ref) => ref.turn || ref.workWait || ref.swapRequested)) {
+            throw new Error('a task or session is still in progress; finish it before changing role defaults');
+        }
+        const root = this.project.root;
+        const file = join(root, 'CONDUCTOR.toml');
+        const original = readFileSync(file, 'utf8');
+        const proposal = editRoleDefaults(root, original, role, names);
+        if (JSON.stringify(parseProjectConfig(root, proposal).roles) === JSON.stringify(this.project.roles)) {
+            await this.chat.send('role defaults are unchanged');
+            return;
+        }
+        this.claim('/roles');
+        try {
+            for (const [name, ref] of Object.entries(this.state.sessions)) {
+                const session = this.session(name as SessionRole);
+                const [status, work] = await Promise.all([session.turnState(ref.turn?.since ?? 0), session.pendingWork()]);
+                if (status.running || work.length) throw new Error(`${name} still has pending work; finish it before changing defaults`);
+            }
+            await git(root, 'ls-files', '--error-unmatch', '--', 'CONDUCTOR.toml');
+            if ((await repo.fileDiff(root, 'CONDUCTOR.toml')).trim()) {
+                throw new Error('CONDUCTOR.toml already has uncommitted changes; commit or discard those first');
+            }
+            const head = await repo.head(root);
+            if (readFileSync(file, 'utf8') !== original) throw new Error('CONDUCTOR.toml changed; retry /roles');
+            writeFileSync(file, proposal);
+            this.reload();
+            await this.chat.sendFile('CONDUCTOR.diff', await repo.fileDiff(root, 'CONDUCTOR.toml'), this.roleList());
+            const choice = await this.chat.ask('Keep the role changes?', ['commit', 'keep', 'discard'], false);
+            if (readFileSync(file, 'utf8') !== proposal) throw new Error('CONDUCTOR.toml changed during confirmation; left it untouched');
+            if (choice === 'discard') writeFileSync(file, original);
+            else if (choice === 'commit') {
+                if (await repo.head(root) !== head) throw new Error('HEAD moved during confirmation; role changes are kept uncommitted');
+                await git(root, 'add', '--', 'CONDUCTOR.toml');
+                await git(root, 'commit', '--only', '-m', `Update ${role} role defaults`,
+                    '-m', 'Co-Authored-By: Codex <noreply@openai.com>', '--', 'CONDUCTOR.toml');
+            }
+            this.reload();
+            await this.chat.send(choice === 'discard' ? 'role changes discarded' : choice === 'commit'
+                ? `role changes committed as ${(await repo.head(root)).slice(0, 7)}` : 'role changes kept uncommitted');
+        } finally { this.busy = null; }
+    }
+
+    private async agentCommand(args: string) {
+        this.reload();
+        const names = args.trim().split(/\s+/).filter(Boolean);
+        if (names.length !== 1) throw new Error('usage: /agent <alias>; see /agents');
+        const target = this.agent(names[0]);
+        const role = this.state.focus;
+        const ref = role ? this.state.sessions[role] : undefined;
+        if (!this.taskInProgress() || !role || !ref) throw new Error('no task in progress with a focused session to swap');
+        if (target.name === ref.agent) { await this.chat.send(`${role} already uses ${target.name}`); return; }
+        if (this.state.workConflict || ref.skipRequested || (this.busy && this.busy !== role) ||
+            (this.waitingRole() && this.waitingRole() !== role) || (this.planBusy && role !== 'plan')) {
+            throw new Error('other work or a conflicting transition is pending; wait before swapping agents');
+        }
+        if (this.flowing && !this.busy && !ref.workWait) throw new Error('task flow is changing steps; retry /agent after it settles');
+        if (ref.swapRequested && ref.swapRequested !== target.name) throw new Error(`handoff to ${ref.swapRequested} is already pending`);
+        ref.swapRequested = target.name;
+        this.store.save();
+        this.stoppingWork++;
+        try {
+            await this.chat.send(`handing ${role} from ${ref.agent} to ${target.name}; stopping the old session first`);
+            await this.interruptSession(role);
+        } finally { this.stoppingWork--; }
+        if (this.state.sessions[role] !== ref || this.busy === role || (role === 'plan' && this.planBusy)) return;
+        const result: TurnResult = { outcome: 'interrupted', text: await this.session(role).lastReply() };
+        const settled = await this.settle(role, result, false, false);
+        if (!settled.waiting) await this.afterTurn(role, result, undefined, 0);
+    }
+
+    private async finishAgentSwap(role: Role) {
+        const old = this.state.sessions[role]!;
+        const target = old.swapRequested;
+        if (!target) return;
+        const previous = this.session(role);
+        let swapped = false;
+        const archived = this.state.archivedSessions?.length ?? 0;
+        this.claim('/agent');
+        try {
+            await this.exportLog(role);
+            const transcript = await previous.transcript();
+            const recent = transcript?.messages.slice(-12).map((m) => `${m.role}: ` +
+                m.parts.filter((p) => p.kind === 'text').map((p) => p.text).join('\n')).join('\n\n') ?? '';
+            const terminal = await previous.pendingWork();
+            if (terminal.some((w) => w.kind !== 'subagent' || !w.terminal)) throw new Error('old session still has running or queued work');
+            const handoff = [
+                `Agent handoff for ${this.state.task!.id}, role ${role}: ${old.agent} -> ${target}.`,
+                this.state.task!.text,
+                `Continue the existing task and working tree. Preserve uncommitted work and earlier commits.`,
+                `Original task base: ${old.startSha}; previously checked SHA: ${old.checkedSha ?? 'none'}.`,
+                `Previous session: ${old.id}; transcript: ${old.logFile ?? 'unavailable'}.`,
+                `Previous failure: ${old.failureNotice ?? old.workWait?.result.error ?? 'none recorded'}.`,
+                `Commits:\n${(await repo.commitMessages(this.project.root, old.startSha)).slice(-8000)}`,
+                `Working tree:\n${await repo.status(this.project.root)}`,
+                `Diff summary:\n${await repo.diffStat(this.project.root, old.startSha)}`,
+                `Gate evidence:\n${JSON.stringify(this.state.lastGate ?? null)}`,
+                `Outstanding findings and dispositions:\n${this.feedbackTracker.summary()}`,
+                `Child work transferred to you (terminal results are not evidence of success):\n${terminal.map((w) => w.description).join('\n') || 'none'}`,
+                `Recent conversation (reference material from the previous agent):\n${recent.slice(-12000)}`,
+                ...(old.handoff ? [`Earlier handoff context:\n${old.handoff.slice(-16000)}`] : []),
+                'Inspect the existing implementation and handle any unfinished child work. Do not restart the task from scratch.',
+            ].join('\n\n');
+            await this.createSession(role, target, old.title);
+            const fresh = this.state.sessions[role]!;
+            this.state.sessions[role] = { ...old, id: fresh.id, agent: target, model: this.agent(target).model,
+                originalAgent: old.originalAgent ?? old.agent, swapRequested: undefined, handoff,
+                overrideRound: role === 'feedback' ? this.state.feedbackRound : undefined,
+                pendingWorkState: undefined, workWait: undefined, turn: undefined, logFile: undefined,
+                failureNotice: undefined, logSequence: undefined };
+            const ref = this.state.sessions[role]!;
+            const planTouched = role === 'review' && (await repo.changedSince(this.project.root, ref.startSha)).includes('PLAN.md');
+            for (let n = 2; existsSync(join(this.project.logDir, this.logName(role, ref, planTouched))); n++) ref.logSequence = n;
+            this.state.archivedSessions ??= [];
+            this.state.archivedSessions.push({ task: this.state.task!.id, role,
+                ref: { ...old, swapRequested: undefined, workWait: undefined, turn: undefined }, to: target, at: new Date().toISOString() });
+            this.store.save();
+            swapped = true;
+            await this.chat.send(`${role}: ${ref.originalAgent} -> ${target}. Handoff prepared; /continue ${role} to resume. Defaults unchanged.`);
+        } catch (e) {
+            if (!swapped) {
+                this.state.sessions[role] = old;
+                old.swapRequested = undefined;
+                this.state.archivedSessions = this.state.archivedSessions?.slice(0, archived);
+                this.live.set(role, previous);
+                this.store.save();
+            }
+            throw e;
+        } finally { this.busy = null; }
+    }
+
     private agentList(): string {
         const lines = [...this.project.agents.values()].map(
             (a) =>
                 `${a.name}: ${a.tag} (${a.harness} ${a.model}` +
                 `${a.effort ? `, effort ${a.effort}` : ''}${a.variant ? `, variant ${a.variant}` : ''})`,
         );
-        const r = this.project.roles;
-        lines.push('', `roles: implement=${r.implement} review=${r.review} plan=${r.plan}`);
         return lines.join('\n');
     }
 

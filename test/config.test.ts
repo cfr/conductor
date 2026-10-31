@@ -76,6 +76,8 @@ aliases = ["server"]
     assert.throws(() => parseProjectConfig('/r', base + '[commands.d]\ncmd = "x"\nready = "y"\n'), /background/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.review]\ncmd = "x"\n'), /built-in/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.skip]\ncmd = "x"\n'), /built-in/);
+    assert.throws(() => parseProjectConfig('/r', base + '[commands.roles]\ncmd = "x"\n'), /built-in/);
+    assert.throws(() => parseProjectConfig('/r', base + '[commands.agent]\ncmd = "x"\n'), /built-in/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.Deploy]\ncmd = "x"\n'), /lowercase/);
     assert.deepEqual(c.commands.map((x) => x.aliases), [[], ['server']]);
     assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["deploy"]')), /already taken/);

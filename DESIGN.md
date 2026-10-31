@@ -136,7 +136,18 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
 - `/todo [id]`: list the `PLAN.md` "Next" items, or show one in full
 - `/plan [agent] [topic]`, `/plan done`: a planning discussion (see below)
 - `/chat [new] [agent] <message>`, `/chat stop`, `/summary [role] [agent]`: see "Chat"
-- `/agents`: list configured agents and role defaults
+- `/agents`: list configured agent aliases and models
+- `/roles [role agents...]`: show defaults and current assignments, or edit one default in the
+  tracked `CONDUCTOR.toml` when no task or session is in progress. Show the diff and offer
+  commit / keep / discard; commits include only that config file. Scalar roles take one alias,
+  feedback takes an ordered list. Preserve unrelated config, comments and explicit flow settings.
+- `/agent <alias>`: hand off the current task's focused role without changing defaults. Stop the
+  old session and its owned work; preserve task/finding/gate metadata and the working tree. Wait
+  for live or queued work, but transfer terminal child results with their failure status. Persist
+  the pending handoff across restarts, archive the old session, and prepare context for the next
+  `/continue`. No model turn starts at swap time. Unexpected retired-session resumes are stopped
+  and require a fresh verification gate. Current assignments show `old -> new`; feedback defaults
+  remain space-separated.
 - `/status`: current task, step, which agent is running, last gate result
 - `/stop [chat|plan]`: interrupt the running agent (or the chat, or the planner)
 - `/log`: export the current sessions to `wlog/` now
@@ -223,6 +234,16 @@ requiring a synthetic notification. It recursively checks descendants, durable s
 metadata and inbox entries. Completion is acknowledged only after a new parent assistant
 request follows the notification and the parent becomes idle. Final active-session/inbox/time
 checks catch resumes racing the transcript reads.
+Assistant-message errors are cached with the scan cursors so failed children retain their provider
+error, status and message across restarts. Turn failures are announced before the pending-work
+return path, with a persisted notice to avoid duplicate polling alerts. Failure reporting does
+not release the barrier or automatically retry quota-limited sessions.
+Explicit parent prompts include unhandled descendant failures and persist a receipt only after
+OpenCode accepts the prompt. A later successful, idle parent response acknowledges those exact
+failed executions without requiring a missing synthetic completion. Receipts bind the child idle
+timestamp and error message ID to the delivered parent message ID, survive restarts, and cannot
+acknowledge a reused child's new failure. Active sessions, inboxes, shell jobs and racing resumes
+still hold the barrier. Rejected prompts and failed parent turns do not acknowledge failures.
 
 OpenCode interruption also removes shell jobs owned by the parent and discovered descendants in
 the project location, then interrupts the parent again to catch cleanup-triggered resumes.

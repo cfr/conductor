@@ -9,12 +9,17 @@ interface Message {
     id: string;
     type: string;
     time: { created: number; completed?: number };
+    error?: { message?: string; type?: string; status?: number };
     metadata?: { source?: string; childID?: string };
     content?: { type: string; name?: string; id?: string; time?: { created: number; completed?: number };
         state?: { status: string; input?: { description?: string }; metadata?: { sessionID?: string; status?: string } } }[];
 }
 interface Page { data: Message[]; cursor: { next?: string | null } }
 export type WorkApi = <T>(method: string, path: string) => Promise<T>;
+interface PreparedPrompt {
+    text: string;
+    failures: { id: string; idle: number; failureMessageId?: string }[];
+}
 
 // API cursors and child IDs survive bridge restarts; the durable transcript is the recovery source.
 export class OpencodeWork {
@@ -40,6 +45,35 @@ export class OpencodeWork {
         return this.checking;
     }
 
+    async preparePrompt(text: string): Promise<PreparedPrompt> {
+        const pending = await this.pending();
+        const failed = pending.filter((p) => p.kind === 'subagent' && p.id &&
+            this.state.sessions[p.id]?.failedAt !== undefined);
+        const failures = [...new Set(failed.map((p) => p.id!))].map((id) => ({ id,
+            idle: this.state.sessions[id].failedAt!, failureMessageId: this.state.sessions[id].failure?.messageId }));
+        if (failures.length) {
+            text += '\n\nConductor observed failed child agents (these are failures, not completed reports):\n' +
+                failed.map((p) => `- ${p.id}: ${p.description}`).join('\n') +
+                '\nHandle their unfinished work yourself or explicitly retry it when possible. ' +
+                'Do not assume the children succeeded. If the task is already committed, inspect the ' +
+                'existing work and validation before deciding whether more changes are needed. ' +
+                'Briefly report how you handled these failures. Conductor will acknowledge them only ' +
+                'after this parent turn finishes successfully; running work still blocks advancement.';
+        }
+        return { text, failures };
+    }
+
+    promptDelivered(prompt: PreparedPrompt, messageId: string): void {
+        if (!prompt.failures.length) return;
+        const root = this.state.sessions[this.id];
+        root.failureDeliveries ??= {};
+        for (const failure of prompt.failures) {
+            root.failureDeliveries[failure.id] = { idle: failure.idle, messageId,
+                failureMessageId: failure.failureMessageId };
+        }
+        this.save(this.state);
+    }
+
     async interrupt(): Promise<void> {
         const path = `/api/session/${encodeURIComponent(this.id)}/interrupt`;
         await this.api('POST', path);
@@ -54,6 +88,8 @@ export class OpencodeWork {
     private async stopShells(): Promise<void> {
         // Refresh ownership from structured subagent results before removing any jobs.
         await this.pending();
+        const children = await Promise.allSettled(Object.keys(this.state.sessions).filter((id) => id !== this.id)
+            .map((id) => this.api('POST', `/api/session/${encodeURIComponent(id)}/interrupt`)));
         const query = new URLSearchParams({ 'location[directory]': this.cwd });
         const shells = await this.api<{ data: { id: string; metadata?: { sessionID?: string } }[] }>(
             'GET', `/api/shell?${query}`,
@@ -63,7 +99,7 @@ export class OpencodeWork {
         const results = await Promise.allSettled(shells.data
             .filter((s) => s.metadata?.sessionID && owned.has(s.metadata.sessionID))
             .map((s) => this.api('DELETE', `/api/shell/${encodeURIComponent(s.id)}?${query}`)));
-        const failures = results.filter((r) => r.status === 'rejected');
+        const failures = [...children, ...results].filter((r) => r.status === 'rejected');
         if (failures.length) throw new AggregateError(failures.map((r) => r.reason), 'Could not stop owned shell jobs');
     }
 
@@ -90,6 +126,7 @@ export class OpencodeWork {
         const beforeState = JSON.stringify(this.state);
         const pending: PendingWork[] = [];
         const observed = new Map<string, SessionInfo>();
+        const latestAssistants = new Map<string, Message>();
         const initial = await this.api<{ data: Record<string, unknown> }>('GET', '/api/session/active');
         if (!initial.data || typeof initial.data !== 'object') throw new Error('opencode returned invalid active sessions');
         const visiting = new Set<string>();
@@ -107,6 +144,16 @@ export class OpencodeWork {
             ]);
             if (!info.data?.time || !Array.isArray(inbox.data)) throw new Error('opencode returned invalid session work status');
             observed.set(id, info.data);
+            if (assistants[0]) latestAssistants.set(id, assistants[0]);
+            scope.failedAt = info.data.outcome === 'failed' && info.data.time.idle !== undefined &&
+                info.data.time.idle >= info.data.time.updated && !initial.data[id] ? info.data.time.idle : undefined;
+            const latest = assistants.find((m) => m.time.completed !== undefined);
+            if (latest?.error) {
+                scope.failure = { messageId: latest.id, message: latest.error.message ?? 'Unknown provider error',
+                    type: latest.error.type, status: latest.error.status };
+            } else if (latest || info.data.outcome === 'succeeded') {
+                delete scope.failure;
+            }
             if (initial.data[id] || info.data.time.idle === undefined || info.data.time.idle < info.data.time.updated) {
                 pending.push({ kind: 'session', id, description: `session ${id} is still running` });
             }
@@ -152,8 +199,26 @@ export class OpencodeWork {
                 const consumed = delivered && assistant?.time.completed !== undefined &&
                     assistant.time.created >= deliveredAt && info.data.time.idle !== undefined &&
                     info.data.time.idle >= assistant.time.completed;
-                if (!consumed) pending.push({ kind: 'subagent', id: child.id, description:
-                    `${child.description}: ${childDone ? 'waiting for parent to process completion' : 'running'}` });
+                const receipt = this.state.sessions[this.id].failureDeliveries?.[child.id];
+                const root = observed.get(this.id)!;
+                const rootAssistant = latestAssistants.get(this.id);
+                const failureHandled = childDone && terminal.outcome === 'failed' &&
+                    receipt !== undefined && receipt.idle === terminal.time.idle && receipt.idle >= child.launchedAt &&
+                    receipt.failureMessageId === this.state.sessions[child.id].failure?.messageId &&
+                    root.outcome === 'succeeded' && rootAssistant !== undefined && !rootAssistant.error &&
+                    rootAssistant.id > receipt.messageId && rootAssistant.time.completed !== undefined &&
+                    root.time.idle !== undefined && root.time.idle >= rootAssistant.time.completed &&
+                    root.time.idle >= root.time.updated && !initial.data[this.id];
+                if (!consumed && !failureHandled) {
+                    const failure = this.state.sessions[child.id].failure;
+                    const reason = failure ? [failure.type, failure.status ? `HTTP ${failure.status}` : '', failure.message]
+                        .filter(Boolean).join(': ').replace(/\s+/g, ' ') : 'no provider error recorded';
+                    const status = childDone && terminal.outcome === 'failed'
+                        ? `failed (${reason}); waiting for parent to process failure`
+                        : childDone ? 'waiting for parent to process completion' : 'running';
+                    pending.push({ kind: 'subagent', id: child.id, description: `${child.description}: ${status}`,
+                        terminal: childDone && !initial.data[child.id] ? terminal.outcome : undefined });
+                }
             }
             visiting.delete(id);
         };

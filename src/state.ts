@@ -23,6 +23,12 @@ export interface SessionRef {
     dispositionPending?: boolean;
     pendingWorkState?: PendingWorkState;
     skipRequested?: boolean;
+    failureNotice?: string;
+    swapRequested?: string;
+    originalAgent?: string;
+    overrideRound?: number;
+    handoff?: string;
+    logSequence?: number;
     workWait?: { since: number; result: TurnResult; readOnly: boolean; gateAttempt: number; detail: string };
     // set while a turn runs, so a restart can tell how it ended
     turn?: { since: number; doing: string; gateAttempt?: number };
@@ -42,6 +48,8 @@ export interface GateRecord {
 
 export interface State {
     task?: PlanItem;
+    taskComplete?: boolean;
+    archivedSessions?: { task: string; role: Role; ref: SessionRef; to: string; at: string }[];
     focus?: Role;
     sessions: Partial<Record<SessionRole, SessionRef>>;
     lastGate?: GateRecord;

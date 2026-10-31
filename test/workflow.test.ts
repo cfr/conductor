@@ -29,6 +29,10 @@ interface Harness {
     stop(args?: string): Promise<void>;
     skipFeedback(): Promise<void>;
     runFeedback(agent: string): Promise<void>;
+    rolesCommand(args: string): Promise<void>;
+    agentCommand(args: string): Promise<void>;
+    roleList(): string;
+    agentList(): string;
     unsolicited(id: string, event: { phase: 'started' }): Promise<void>;
 }
 const feedback = (findings: unknown[], verifications: unknown[] = [], verdict = findings.length ? 'findings' : 'clean') =>
@@ -576,5 +580,249 @@ test('skip consumes exactly one round when the next round uses the same checker'
         assert.ok(f.prompts[0].text.startsWith('Custom checker prompt'));
         assert.equal(f.store.state.feedbackSkips!.length, 1);
         assert.equal(f.store.state.feedbackSkips![0].round, 1);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('provider failures are reported before pending work settles without repeated polling alerts', async () => {
+    const f = setup([]);
+    const impl = f.h.live.get('implement')!;
+    const error = "You've reached your 5-hour usage limit.";
+    let pending = true;
+    impl.pendingWork = async () => pending ? [{ kind: 'subagent', id: 'child',
+        description: 'Map navigation: failed (provider.quota: HTTP 429); waiting for parent to process failure' }] : [];
+    impl.turnState = async () => ({ running: false, outcome: 'failed', error });
+    try {
+        await f.h.settle('implement', { outcome: 'failed', error, text: '' });
+        assert.ok(f.store.state.sessions.implement!.workWait);
+        const failures = () => f.sent.filter((s) => s.includes('turn failed: ' + error));
+        assert.equal(failures().length, 1);
+        assert.ok(f.sent.some((s) => s.includes('provider.quota: HTTP 429')));
+        await f.h.drainWork();
+        await f.h.drainWork();
+        assert.equal(failures().length, 1);
+        assert.equal(f.prompts.length, 0);
+        pending = false;
+        await f.h.drainWork();
+        assert.equal(failures().length, 1);
+        assert.equal(f.prompts.length, 0);
+        assert.equal(f.store.state.sessions.implement!.workWait, undefined);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('roles edit supports keep, discard and config-only commits without disturbing staged work', async () => {
+    for (const choice of ['keep', 'discard', 'commit']) {
+        const f = setup([]);
+        try {
+            f.store.state.task = undefined;
+            const file = join(f.project, 'CONDUCTOR.toml');
+            const original = readFileSync(file, 'utf8');
+            writeFileSync(join(f.project, 'code.txt'), 'staged unrelated work');
+            f.git('add', 'code.txt');
+            f.chat.ask = async () => choice;
+            await f.h.rolesCommand('implement sol');
+            const content = readFileSync(file, 'utf8');
+            assert.equal(content === original, choice === 'discard');
+            if (choice === 'commit') {
+                assert.equal(f.git('show', '--format=', '--name-only', 'HEAD'), 'CONDUCTOR.toml');
+                assert.match(f.git('log', '-1', '--format=%B'), /Co-Authored-By: Codex/);
+                assert.equal(f.git('diff', '--cached', '--name-only'), 'code.txt');
+            } else assert.equal(f.git('log', '-1', '--format=%s'), 'Initial');
+            assert.equal(f.h.busy, null);
+        } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+    }
+});
+
+test('roles edits refuse unfinished tasks, hidden pending work and dirty configuration', async () => {
+    const f = setup([]);
+    try {
+        await assert.rejects(f.h.rolesCommand('implement sol'), /task or session is still in progress/);
+        f.store.state.taskComplete = true;
+        f.h.live.get('implement')!.pendingWork = async () => [{ kind: 'shell', id: 'job', description: 'unfinished smoke' }];
+        await assert.rejects(f.h.rolesCommand('implement sol'), /pending work/);
+        f.h.live.get('implement')!.pendingWork = async () => [];
+        const file = join(f.project, 'CONDUCTOR.toml');
+        writeFileSync(file, readFileSync(file, 'utf8') + '\n# user edit\n');
+        await assert.rejects(f.h.rolesCommand('implement sol'), /already has uncommitted/);
+        assert.equal(f.h.busy, null);
+        assert.equal(f.h.agentList().includes('roles:'), false);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('agent handoff preserves dirty work, task base and repair metadata and waits for continue', async () => {
+    const f = setup([]);
+    f.store.state.focus = 'implement';
+    try {
+        const old = f.store.state.sessions.implement!;
+        const base = old.startSha;
+        old.checkedSha = base;
+        f.store.state.feedbackFindingIds = ['0170-F01'];
+        f.store.state.feedbackFixBase = base;
+        f.store.state.feedbackDispositionPending = true;
+        writeFileSync(join(f.project, 'code.txt'), 'unfinished implementation');
+        await f.h.agentCommand('sol');
+        const fresh = f.store.state.sessions.implement!;
+        assert.equal(fresh.agent, 'sol');
+        assert.equal(fresh.originalAgent, 'kimi');
+        assert.equal(fresh.startSha, base);
+        assert.equal(fresh.checkedSha, base);
+        assert.notEqual(fresh.id, old.id);
+        assert.equal(readFileSync(join(f.project, 'code.txt'), 'utf8'), 'unfinished implementation');
+        assert.deepEqual(f.store.state.feedbackFindingIds, ['0170-F01']);
+        assert.equal(f.store.state.feedbackFixBase, base);
+        assert.equal(f.store.state.feedbackDispositionPending, true);
+        assert.equal(f.prompts.length, 0);
+        assert.match(fresh.handoff!, /Working tree:[\s\S]*code.txt/);
+        assert.match(f.h.roleList(), /implement: kimi -> sol/);
+        assert.ok(existsSync(old.logFile!));
+        assert.equal(f.store.state.archivedSessions!.length, 1);
+        assert.match(readFileSync(join(f.project, 'CONDUCTOR.toml'), 'utf8'), /implement = "kimi"/);
+        await f.h.agentCommand('kimi');
+        assert.equal(f.store.state.sessions.implement!.agent, 'kimi');
+        assert.equal(f.store.state.sessions.implement!.logSequence, 2);
+        assert.ok(existsSync(old.logFile!));
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('quota-failed terminal children transfer to the new agent and handoff survives restart', async () => {
+    const f = setup([]);
+    f.store.state.focus = 'implement';
+    const impl = f.h.live.get('implement')!;
+    impl.pendingWork = async () => [{ kind: 'subagent', id: 'child', terminal: 'failed',
+        description: 'Nav scout: failed (provider.quota HTTP 429)' }];
+    let restored: Harness | undefined;
+    try {
+        await f.h.settle('implement', { outcome: 'failed', text: '', error: 'Quota exhausted' });
+        await f.h.agentCommand('sol');
+        assert.match(f.store.state.sessions.implement!.handoff!, /provider.quota HTTP 429/);
+        assert.equal(f.store.state.sessions.implement!.workWait, undefined);
+        assert.equal(f.prompts.length, 0);
+        await f.h.shutdown();
+        const store = new Store(f.local.stateFile);
+        restored = new Conductor(f.local, store, f.chat) as unknown as Harness;
+        restored.adapters = { codex: f.adapter, opencode: f.adapter, claude: f.adapter };
+        restored.live.set('implement', f.h.live.get('implement')!);
+        await restored.continueTurn('implement');
+        assert.equal(f.prompts[0].agent, 'sol');
+        assert.match(f.prompts[0].text, /Agent handoff for 0170-task/);
+        assert.match(f.prompts[0].text, /provider.quota HTTP 429/);
+        assert.equal(store.state.sessions.implement!.handoff, undefined);
+    } finally { await f.h.shutdown(); await restored?.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('agent swap waits for running children, then hands off exactly once', async () => {
+    const f = setup([]);
+    f.store.state.focus = 'implement';
+    const impl = f.h.live.get('implement')!;
+    let running = true;
+    let interrupted = 0;
+    let restored: Harness | undefined;
+    impl.interrupt = async () => { interrupted++; };
+    impl.pendingWork = async () => running ? [{ kind: 'subagent', id: 'child', description: 'still running' }] : [];
+    try {
+        await f.h.agentCommand('sol');
+        assert.equal(interrupted, 1);
+        assert.equal(f.store.state.sessions.implement!.agent, 'kimi');
+        assert.equal(f.store.state.sessions.implement!.swapRequested, 'sol');
+        await f.h.shutdown();
+        const store = new Store(f.local.stateFile);
+        restored = new Conductor(f.local, store, f.chat) as unknown as Harness;
+        restored.adapters = { codex: f.adapter, opencode: f.adapter, claude: f.adapter };
+        restored.live.set('implement', impl);
+        running = false;
+        await restored.drainWork();
+        await restored.drainWork();
+        assert.equal(store.state.sessions.implement!.agent, 'sol');
+        assert.equal(store.state.archivedSessions!.length, 1);
+        assert.equal(f.prompts.length, 0);
+    } finally { await f.h.shutdown(); await restored?.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('agent interrupts a running implementer and prevents the old turn from starting feedback', async () => {
+    const f = setup([]);
+    f.store.state.focus = 'implement';
+    const impl = f.h.live.get('implement')!;
+    let ready!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const stopped = new Promise<void>((resolve) => { release = resolve; });
+    impl.send = async () => { ready(); await stopped; return { outcome: 'interrupted', text: 'Interrupted implementation' }; };
+    impl.interrupt = async () => { release(); };
+    try {
+        const turn = f.h.continueTurn('implement');
+        await started;
+        await f.h.agentCommand('sol');
+        await turn;
+        await f.h.drainWork();
+        assert.equal(f.store.state.sessions.implement!.agent, 'sol');
+        assert.equal(f.store.state.archivedSessions!.length, 1);
+        assert.equal(f.prompts.length, 0);
+        assert.equal(existsSync(join(f.project, 'gate-count')), false);
+        assert.equal(f.h.busy, null);
+    } finally { release(); await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('feedback agent swap affects the current slot only and final review marks the task settled', async () => {
+    const f = setup([feedback([]), feedback([]), feedback([])]);
+    try {
+        const checker = await f.adapter.create({ name: 'ds', model: 'test-ds', tag: 'ds', harness: 'codex' }, {
+            title: '0170-task feedback', cwd: f.project, asker: { permission: async () => 'reject', question: async () => '' },
+        });
+        f.h.live.set('feedback', checker);
+        f.store.state.sessions.feedback = { id: checker.id, agent: 'ds', title: '0170-task feedback', startSha: f.git('rev-parse', 'HEAD') };
+        f.store.state.focus = 'feedback';
+        f.store.state.feedbackRound = 1;
+        await f.h.agentCommand('glm');
+        assert.match(f.h.roleList(), /feedback: ds glm mm/);
+        assert.match(f.h.roleList(), /feedback: 1\/3 — ds -> glm/);
+        assert.equal(f.store.state.feedbackRound, 1);
+        await f.h.continueTurn('feedback');
+        assert.deepEqual(f.prompts.map((p) => p.agent), ['glm', 'glm', 'mm', 'sol']);
+        assert.equal(f.store.state.taskComplete, true);
+        await assert.rejects(f.h.agentCommand('kimi'), /no task in progress/);
+        f.chat.ask = async () => 'discard';
+        await f.h.rolesCommand('feedback mm ds');
+        assert.match(f.h.roleList(), /feedback: ds glm mm/);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('roles confirmation cannot overwrite concurrent edits and never stages unrelated files', async () => {
+    const f = setup([]);
+    f.store.state.task = undefined;
+    const path = join(f.project, 'CONDUCTOR.toml');
+    try {
+        f.chat.ask = async () => {
+            writeFileSync(path, readFileSync(path, 'utf8') + '\n# concurrent user edit\n');
+            return 'discard';
+        };
+        await assert.rejects(f.h.rolesCommand('implement sol'), /changed during confirmation/);
+        assert.match(readFileSync(path, 'utf8'), /concurrent user edit/);
+        assert.equal(f.git('diff', '--cached', '--name-only'), '');
+        assert.equal(f.h.busy, null);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('failed handoff restores the old session and a retired resume cannot silently keep writing', async () => {
+    const f = setup([]);
+    f.store.state.focus = 'implement';
+    const old = f.h.live.get('implement')!;
+    const oldId = old.id;
+    const create = f.adapter.create.bind(f.adapter);
+    try {
+        f.adapter.create = async () => { throw new Error('target provider unavailable'); };
+        await assert.rejects(f.h.agentCommand('sol'), /target provider unavailable/);
+        assert.equal(f.store.state.sessions.implement!.id, oldId);
+        assert.equal(f.store.state.sessions.implement!.swapRequested, undefined);
+        assert.equal(f.h.live.get('implement'), old);
+        assert.equal(f.h.busy, null);
+        f.adapter.create = create;
+        await f.h.agentCommand('sol');
+        let stopped = false;
+        old.interrupt = async () => { stopped = true; };
+        const newId = f.store.state.sessions.implement!.id;
+        await f.h.unsolicited(oldId, { phase: 'started' });
+        assert.equal(stopped, true);
+        assert.match(f.store.state.workConflict!, /retired implement session/);
+        assert.equal(f.store.state.sessions.implement!.id, newId);
+        assert.equal(f.prompts.length, 0);
     } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
 });

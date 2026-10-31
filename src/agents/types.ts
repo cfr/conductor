@@ -34,6 +34,7 @@ export interface PendingWork {
     kind: 'shell' | 'subagent' | 'session' | 'inbox';
     id?: string;
     description: string;
+    terminal?: TurnResult['outcome'];
 }
 
 export interface PendingWorkState {
@@ -42,6 +43,9 @@ export interface PendingWorkState {
         syntheticCursor?: string;
         children: { id: string; toolId: string; description: string; launchedAt: number; returnedAt?: number }[];
         notifications: Record<string, { id: string; created: number }>;
+        failure?: { messageId: string; message: string; type?: string; status?: number };
+        failedAt?: number;
+        failureDeliveries?: Record<string, { idle: number; messageId: string; failureMessageId?: string }>;
     }>;
 }
 

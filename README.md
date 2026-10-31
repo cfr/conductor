@@ -131,7 +131,10 @@ collapsed quotes so you can inspect what the agent received.
 | `/summary [role] [agent]` | Ask a fresh read-only session to summarize a session log. |
 | `/status` | Show the task, running/pending work, sessions, and last gate. |
 | `/stop [chat\|plan]` | Interrupt a running agent, chat, or planner. |
-| `/agents` | List configured agents and main role defaults. |
+| `/agents` | List configured agent aliases and models. |
+| `/roles` | Show configured role defaults and current task assignments. |
+| `/roles <role> <agents...>` | Edit role defaults while no task or session is in progress. |
+| `/agent <alias>` | Hand off the current task's focused role, then wait for `/continue`. |
 | `/log` | Export session logs and the current finding summary. |
 | `/help` | Show commands, including configured project commands. |
 
@@ -182,6 +185,30 @@ startup using PID records. Logs and PID records live under `commands/` beside th
 
 ## Pending work and recovery
 
+`/roles` prints defaults with space-separated feedback agents, such as `feedback: glmf dsf`.
+Current-task swaps appear as `implement: k3 -> sol` or `feedback: 1/2 — glmf -> sol`.
+Use `/agents` to find the configured aliases. For example:
+
+```text
+/roles implement sol
+/roles feedback glmf dsf
+```
+
+Role edits require an idle workflow and no unfinished task, including a stopped task. They update
+only the selected assignment in the tracked `CONDUCTOR.toml`, show the diff, and offer **commit**,
+**keep** (uncommitted), or **discard**. Existing uncommitted config edits must be resolved first;
+committing role changes excludes unrelated staged work. Normal configuration inheritance still
+applies, and an explicit `[flow] feedback_rounds` remains unchanged.
+
+During a task, `/agent sol` stops the focused session and its owned work, then creates a fresh
+session for that role. It preserves the task base, commits, uncommitted files, feedback round,
+gate evidence and pending finding dispositions. The handoff includes recent conversation and
+old transcript paths; no model summary is required. Terminal child failures transfer as failures
+for the new agent to handle; running sessions, shell jobs and queued work must settle first.
+The old session and logs are archived, and repeated swaps keep separate transcript/usage files.
+The new agent waits for `/continue` before spending tokens. Defaults remain unchanged. Swapping
+the first feedback checker leaves the rest of the configured sequence in place.
+
 An idle parent session can still have background work. For opencode, conductor checks shell jobs,
 subagents and their descendants, queued inbox work, and completion processing. It waits until
 notifications are delivered and the parent has processed them and become idle again. Foreground
@@ -190,7 +217,14 @@ subagent results can acknowledge completion inline.
 The gate, a new task, and another feedback/review session cannot start while this work is pending.
 `/status` names the outstanding work. Conductor rechecks every two seconds without sending model
 prompts. Failed status lookups hold the workflow as unknown; they never imply that work finished.
+Turn failures are reported even while this barrier is held. Failed OpenCode children show their
+provider error and HTTP status in pending-work messages and `/status`, rather than appearing to
+still be running. Failure details survive restarts; polling does not repeat the same turn alert.
 `/continue <role>` can send instructions to the same waiting session.
+For failed OpenCode children whose completion notifications never arrived, the next parent
+prompt includes their recorded failures. Conductor records delivery of that prompt and releases
+those failure waits only after the parent finishes successfully. It does not treat the children
+as successful, retry them automatically, or ignore their running jobs and queued work.
 
 `/skip` interrupts the current feedback checker, waits for its pending work to settle, and
 advances exactly one feedback step. It also works on a stopped or incomplete feedback report.
