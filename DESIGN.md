@@ -2,7 +2,7 @@
 
 A Telegram bridge that drives the iteration loop (one agent implements, another reviews and
 fixes) from one chat, so sessions no longer need manual renaming, exporting or switching between
-tmux windows. Written for bane's workflow; nothing in it is bane-specific beyond the defaults.
+tmux windows. Each project configures its own agents, verification gate and commands.
 Status: prototype (see README "Status").
 
 ## Task ids
@@ -27,8 +27,8 @@ default.
 
 ```toml
 [gate]
-build = "cmake --build --preset desktop"
-test = "ctest --preset desktop"
+build = "cmake --build --preset debug"
+test = "ctest --preset debug --output-on-failure"
 
 [roles]
 implement = "glm"
@@ -83,7 +83,7 @@ The same loop as today, one command per step, with the bridge doing the bookkeep
    id), shows the id, the item text and the agent, and on confirmation starts a session with
    that agent (default `roles.implement`) titled with the id and the prompt `please do <id>`.
 2. The agent implements and commits. When the session goes idle the bridge runs the
-   verification gate itself (`[gate]` in `CONDUCTOR.toml`; here desktop build + `ctest`).
+   verification gate itself (`[gate]` in `CONDUCTOR.toml`; here build followed by tests).
    - Gate fails: the bridge sends the failure output back to the same session once ("the gate
      failed, fix it: ..."), then runs the gate again. A second failure is reported and the
      task waits for me.

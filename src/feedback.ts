@@ -3,6 +3,15 @@ import { FindingStore, findingSummary, type Receipt, type Source } from './findi
 import type { Store } from './state.ts';
 import * as repo from './repo.ts';
 
+export const commitGuidance = `When committing, write the exact message with real line breaks to a temporary file using
+a quoted heredoc or a file-writing tool, then run git commit -F <message-file>. Do not put literal
+backslash-n sequences in a quoted git commit -m argument: the shell does not turn those into line
+breaks. Follow the project's title and body rules. Put the Co-authored-by trailer on its own line,
+separated from the body by a blank line. Before committing, inspect the message file and run
+git interpret-trailers --parse on that file; confirm the intended trailer is parsed. Do not
+commit a malformed draft. After committing, inspect git log -1 --format=%B and its parsed trailers.
+Do not amend or rewrite existing history to repair earlier malformed messages; record the limitation.`;
+
 export const validationGuidance =
     'For behavior fixes, demonstrate at least one regression test failing without the fix and passing ' +
     'with it, or explain why this cannot be demonstrated. When behavior crosses components, test through ' +

@@ -1,13 +1,14 @@
-# Conductor configuration for this project (the conductor lives in ../conductor): which agents
+# Project configuration: which agents
 # implement, check, review and plan, the verification gate it runs after every committing turn,
 # the prompts it sends, and project commands (/deploy, /serve) that only run when sent from the
 # chat. The conductor re-reads it when a command starts (/next, /review, /plan...), so edits apply
 # without a restart.
 
 # Conductor records this gate result for checkers; unchanged green trees need no full rerun.
+# Replace the tools/* commands below with your project's own scripts.
 [gate]
-build = "cmake --build --preset desktop"
-test = "ctest --preset desktop"
+build = "cmake --build --preset debug"
+test = "ctest --preset debug --output-on-failure"
 
 [roles]
 implement = "glm"
@@ -56,15 +57,15 @@ feedback_rounds = 3
 dir = "wlog"
 
 [commands.deploy]
-cmd = "deploy/deploy.sh"
-description = "git push, build and upload images, update the VPS"
+cmd = "tools/deploy"
+description = "deploy the project"
 confirm = true
 
 [commands.serve]
-cmd = "cmake --build build-wasm && exec deploy/serve.py"
-description = "rebuild wasm and serve it over https with a local game server"
+cmd = "tools/serve"
+description = "start the development server"
 background = true
-ready = "open https://"
+ready = "listening"
 aliases = ["server"]
 
 [prompts]

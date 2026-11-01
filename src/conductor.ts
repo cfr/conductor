@@ -15,7 +15,7 @@ import {
     type Role,
     type SessionRole,
 } from './config.ts';
-import { FeedbackTracker, feedbackContract, dispositionContract } from './feedback.ts';
+import { FeedbackTracker, feedbackContract, dispositionContract, commitGuidance } from './feedback.ts';
 import { escapeHtml } from './format.ts';
 import { Jobs, logTail, readLog } from './jobs.ts';
 import { renderMarkdown, usageMetadata } from './logs/markdown.ts';
@@ -1070,6 +1070,7 @@ export class Conductor {
         if (this.state.sessions[role]?.swapRequested) throw new Error('agent handoff is pending; wait before sending another turn');
         const handoff = this.state.sessions[role]?.handoff;
         if (handoff) text = `${handoff}\n\nNext instruction:\n${text}`;
+        if (role !== 'feedback') text += `\n\nCommit message handling:\n${commitGuidance}`;
         if (role === 'plan') {
             await this.planTurn(text, doing, quote);
             return;

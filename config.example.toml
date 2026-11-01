@@ -1,7 +1,7 @@
 # Copy to config.toml (gitignored: it holds the bot token). Machine-specific settings only; the
 # project's agents, roles, gate and prompts live in the project's CONDUCTOR.toml.
 
-project = "~/Code/bane"
+project = "~/Code/my-project"
 
 # Defaults to state/state.json next to this file.
 # state = "state/state.json"

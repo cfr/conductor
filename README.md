@@ -34,8 +34,8 @@ gets a turn. The Anthropic SDK npm dependency is still required because it is im
 Saved sessions refer to configured agent names; keep those definitions while using the sessions.
 
 The target project needs `PLAN.md` with a `## Next` list and `CONDUCTOR.toml` at its root.
-[CONDUCTOR.example.toml](CONDUCTOR.example.toml) is a starting template based on bane, rather than
-a copy of its current live configuration. Adjust its models, gate, and commands for your project.
+[CONDUCTOR.example.toml](CONDUCTOR.example.toml) is a starting template. Adjust its models, gate,
+and commands for your project.
 
 ## Configuration
 
@@ -67,12 +67,13 @@ summary = "codex"
 list. `chat` defaults to `plan`; `summary` defaults to `chat`. Commands can override the default
 agent, for example `/next glm`, `/review codex`, or `/chat codex explain this subsystem`.
 
-Gate entries run in order; the first nonzero exit fails the gate. Use the project's complete
-verification command. Bane, for example, checks both debug and release builds and test suites:
+Gate entries run in order from the project root; the first nonzero exit fails the gate.
+Use your project's verification commands; step names are arbitrary:
 
 ```toml
 [gate]
-all = "tools/check all"
+build = "cmake --build --preset debug"
+test = "ctest --preset debug --output-on-failure"
 ```
 
 Conductor reloads project configuration when commands such as `/next`, `/review`, and `/plan`
@@ -111,6 +112,9 @@ Agents follow the project's instructions for commits and for moving completed ta
 `PLAN.md` to `CHANGELOG.md`. Conductor does not edit those files. Gate output, commit summaries,
 and diffs are posted to Telegram; long outputs are attached as files. Prompts are shown as
 collapsed quotes so you can inspect what the agent received.
+Implementation, review and planning prompts instruct agents to write commit messages to a file
+with real line breaks, validate the co-author trailer, and use `git commit -F`. This avoids
+literal `\n` sequences in quoted `-m` arguments. Earlier commits are not rewritten.
 
 ## Commands
 
@@ -167,10 +171,10 @@ For example:
 
 ```toml
 [commands.serve]
-cmd = "cmake --build build-wasm && exec tools/serve.py"
-description = "rebuild wasm and serve the client"
+cmd = "tools/serve"
+description = "start the development server"
 background = true
-ready = "open https://"
+ready = "listening"
 aliases = ["server"]
 ```
 
@@ -349,7 +353,7 @@ npm run check  # TypeScript
 npm test       # Node test runner
 ```
 
-Conductor is a prototype used for bane's development. Current limits include:
+Conductor is a prototype. Current limits include:
 
 - The verification gate cannot be interrupted through `/stop`.
 - Provider failures require `/continue`; they are not retried automatically. Report-format
