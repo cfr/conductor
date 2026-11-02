@@ -116,7 +116,9 @@ updates that entry with its fixes in the `/fix` commit. The bridge does not edit
 
 A turn that ends without a new commit (a question, or findings) is posted and waits; the gate
 runs only after turns that committed. While an agent runs, other commands that would start a turn
-are refused with the reason; questions from the running agent are still answered.
+are refused with the reason; questions from the running agent are still answered. The task-flow
+lock also covers notifications and automatic transitions between gate, feedback, and review,
+including a manually requested gate, so a new task cannot replace state during a handoff.
 
 Any step can be followed by free text, which goes to the session that step talks to, so a
 review can turn into a discussion before `/fix`. Logs are exported throughout (see "Logs").
@@ -349,6 +351,11 @@ landed starts with `plan_moved` (their list), so the agent re-reads `PLAN.md` be
 - Agents never push or deploy from the bridge. Project commands (`[commands]` in `CONDUCTOR.toml`,
   e.g. `/deploy`, `/serve`) run only when I send them, with a confirmation button where
   `confirm` is set, and a one-shot command never overlaps an agent turn or the gate.
+  Both command types retain process-group ownership through stop cleanup, escalating to SIGKILL
+  for surviving descendants. One-shot commands are tracked for shutdown and crash recovery too.
+  Background starts reserve their name before confirmation or notification awaits; job cleanup
+  removes only the matching job. Telegram routing preserves the configured letter/digit/underscore
+  command names and aliases. Explicit `/stop plan` and `/stop chat` never target another role.
 - The bridge's own gate run is the result it reports, not the agent's claim.
 - Long output (diffs, logs, gate failures) goes as attached files; command output is posted as
   a code block cut to its newest lines; messages stay under Telegram's 4096-character limit.
@@ -361,4 +368,10 @@ Codex uses `codex exec --json`, persists its thread id and event transcript besi
 and uses `exec resume` for follow-up turns. Sandbox policy is set on every turn (read-only or
 workspace-write). Writable turns route on-request approvals through Codex auto-review so Git
 operations can be approved; read-only turns deny escalations. Exec cannot relay approvals to Telegram.
+The adapter owns every created or resumed session and stops its process groups on shutdown.
+Each running group is persisted with its PID and process birth identity. A live recovered group
+counts as running and pending work, preventing a second writer; interruption checks ownership
+before signalling it. An unverifiable identity fails closed. Once stopped, follow-up turns resume
+the saved thread. OpenCode prompt submission failures cancel their completion waiter and poller;
+an older completion poll cannot remove a newer waiter for the same session.
 See README "Codex" for setup and lifecycle limits.

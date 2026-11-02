@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
@@ -6,8 +6,10 @@ import { createInterface } from 'node:readline';
 import type { AgentConfig } from '../config.ts';
 import { emptyUsage, type Message, type Transcript } from '../logs/markdown.ts';
 import type { Adapter, AgentSession, SessionOptions, TurnResult, TurnState } from './types.ts';
+import { groupAlive, killGroup } from '../jobs.ts';
 
 interface Saved {
+    process?: { pid: number; birth: string };
     thread?: string;
     transcript: Transcript;
     result?: TurnResult;
@@ -16,19 +18,39 @@ interface Saved {
 
 // Keep the bridge id stable before Codex emits its thread id, including across restarts.
 export class CodexAdapter implements Adapter {
+    private sessions = new Set<CodexSession>();
+    private closed = false;
     private directory: string;
     private executable: string;
     constructor(directory: string, executable = 'codex') { this.directory = directory; this.executable = executable; }
     async create(agent: AgentConfig, opts: SessionOptions): Promise<AgentSession> {
-        return new CodexSession(agent, randomUUID(), opts, this.directory, this.executable);
+        if (this.closed) throw new Error('Codex adapter is shutting down');
+        const session = new CodexSession(agent, randomUUID(), opts, this.directory, this.executable);
+        this.sessions.add(session);
+        return session;
     }
     resume(agent: AgentConfig, id: string, opts: SessionOptions): AgentSession {
+        if (this.closed) throw new Error('Codex adapter is shutting down');
         if (!/^[a-f0-9-]+$/i.test(id)) throw new Error('Invalid Codex session id');
-        return new CodexSession(agent, id, opts, this.directory, this.executable);
+        const session = new CodexSession(agent, id, opts, this.directory, this.executable);
+        this.sessions.add(session);
+        return session;
     }
+    async shutdown() { this.closed = true; await Promise.all([...this.sessions].map((s) => s.close())); }
+}
+
+function processBirth(pid: number): string {
+    try {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const start = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+        if (start) return `linux:${start}`;
+    } catch { /* ps also supports platforms without procfs */ }
+    try { return execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim(); }
+    catch { return ''; }
 }
 
 class CodexSession implements AgentSession {
+    private closed = false;
     private child?: ChildProcess;
     private stopped = false;
     private saved: Saved;
@@ -65,8 +87,12 @@ class CodexSession implements AgentSession {
         renameSync(`${this.file}.tmp`, this.file);
     }
     async send(text: string): Promise<TurnResult> {
-        if (this.child) throw new Error('Codex session is already running');
+        if (this.closed) throw new Error('Codex session is closed');
+        if (this.child || (this.saved.process && groupAlive(this.saved.process.pid))) {
+            throw new Error('Codex session is still running; /stop it before continuing');
+        }
         this.stopped = false;
+        delete this.saved.process;
         this.saved.since = Date.now();
         delete this.saved.result;
         this.saved.transcript.messages.push({ role: 'user', parts: [{ kind: 'text', text }] });
@@ -89,6 +115,10 @@ class CodexSession implements AgentSession {
         try {
             const child = spawn(this.executable, args, { cwd: this.opts.cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
             this.child = child;
+            if (child.pid) {
+                this.saved.process = { pid: child.pid, birth: processBirth(child.pid) };
+                this.persist();
+            }
             child.stderr.on('data', (b: Buffer) => { stderr = (stderr + b.toString()).slice(-8000); });
             child.stdin.on('error', () => {}); // spawn/exit errors are handled below
             const lines = createInterface({ input: child.stdout });
@@ -130,6 +160,8 @@ class CodexSession implements AgentSession {
         } catch (e) {
             this.saved.result = { outcome: this.stopped ? 'interrupted' : 'failed', text: reply, error: (e as Error).message };
         } finally {
+            if (this.saved.process) await killGroup(this.saved.process.pid);
+            delete this.saved.process;
             this.child = undefined;
             this.persist();
         }
@@ -141,24 +173,31 @@ class CodexSession implements AgentSession {
     }
     async interrupt(): Promise<void> {
         this.stopped = true;
-        const pid = this.child?.pid;
+        const owned = this.saved.process;
+        const pid = this.child?.pid ?? owned?.pid;
         if (!pid) return;
-        const kill = (signal: NodeJS.Signals) => {
-            try { process.kill(-pid, signal); } catch { /* already exited */ }
-        };
-        kill('SIGTERM');
-        const timer = setTimeout(() => kill('SIGKILL'), 3000);
-        timer.unref();
-        this.child?.once('close', () => clearTimeout(timer));
+        if (!this.child && groupAlive(pid) && (!owned?.birth || processBirth(pid) !== owned.birth)) {
+            throw new Error(`Cannot verify ownership of Codex process group ${pid}; refusing to signal it`);
+        }
+        await killGroup(pid);
+        if (!this.child) {
+            delete this.saved.process;
+            this.saved.result = { outcome: 'interrupted', text: await this.lastReply() };
+            this.persist();
+        }
     }
+    async close() { this.closed = true; await this.interrupt(); }
     async transcript(): Promise<Transcript> { return this.saved.transcript; }
     async turnState(since: number): Promise<TurnState> {
-        if (this.child) return { running: true };
+        if (this.child || (this.saved.process && groupAlive(this.saved.process.pid))) return { running: true };
         if (this.saved.result && (this.saved.since ?? 0) >= since - 1000) {
             return { running: false, outcome: this.saved.result.outcome, error: this.saved.result.error };
         }
         return { running: false, outcome: 'interrupted', error: 'Conductor restarted during the Codex turn; use /continue.' };
     }
-    async pendingWork(): Promise<[]> { return []; }
+    async pendingWork() {
+        return this.saved.process && groupAlive(this.saved.process.pid)
+            ? [{ kind: 'session' as const, id: this.id, description: `Codex process group ${this.saved.process.pid} is still running` }] : [];
+    }
     async setReadOnly(on: boolean): Promise<void> { this.opts.readOnly = on; }
 }

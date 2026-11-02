@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { Conductor } from '../src/conductor.ts';
 import { Store } from '../src/state.ts';
 import { FindingStore } from '../src/findings.ts';
-import type { AgentConfig, LocalConfig } from '../src/config.ts';
+import type { AgentConfig, LocalConfig, ProjectCommand } from '../src/config.ts';
 import type { Adapter, AgentSession, SessionOptions, TurnResult } from '../src/agents/types.ts';
 import type { Messenger } from '../src/telegram.ts';
 
@@ -21,6 +21,9 @@ interface Harness {
     continueTurn(args: string): Promise<void>;
     fix(notes: string): Promise<void>;
     gateCommand(): Promise<void>;
+    nextTask(args: string): Promise<void>;
+    backgroundCommand(command: ProjectCommand, args: string): Promise<void>;
+    oneShotCommand(command: ProjectCommand, args: string): Promise<void>;
     settle(role: 'implement', result: TurnResult): Promise<{ waiting: boolean }>;
     drainWork(): Promise<void>;
     startReview(agent: string): Promise<void>;
@@ -213,12 +216,35 @@ test('malformed dispositions are corrected without losing the original repair co
     try {
         await f.h.afterImplementGate();
         assert.deepEqual(f.prompts.map((p) => p.agent), ['ds', 'kimi', 'kimi', 'glm', 'mm', 'sol']);
+        for (const prompt of f.prompts.filter((p) => p.agent === 'kimi')) {
+            const blocks = [...prompt.text.matchAll(/```conductor-dispositions\n([\s\S]*?)\n```/g)];
+            assert.equal(blocks.length, 1);
+            assert.deepEqual(JSON.parse(blocks[0][1]).dispositions.map((d: { id: string }) => d.id), ['0170-F01']);
+            assert.doesNotMatch(prompt.text, /TASK-F01/);
+        }
         const l = f.records.read('0170-task');
         assert.equal(l.findings[0].verification, 'verified');
         assert.deepEqual(l.findings[0].fixCommits, [f.git('rev-parse', 'HEAD')]);
         assert.equal(l.reports.filter((r) => r.kind === 'dispositions' && r.error).length, 1);
         assert.equal(readFileSync(join(f.project, 'gate-count'), 'utf8'), 'passed\n');
     } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('repair and correction examples include every actual requested finding ID', async () => {
+    const f = setup([feedback([finding, { ...finding, key: 'other', summary: 'Another routing bug' }])]);
+    f.setImplementationReplies(['Fixed the code.', 'Fixed the code.']);
+    try {
+        await f.h.afterImplementGate();
+        const repairs = f.prompts.filter((p) => p.agent === 'kimi');
+        assert.equal(repairs.length, 2);
+        for (const prompt of repairs) {
+            const blocks = [...prompt.text.matchAll(/```conductor-dispositions\n([\s\S]*?)\n```/g)];
+            assert.equal(blocks.length, 1);
+            assert.deepEqual(JSON.parse(blocks[0][1]).dispositions.map((d: { id: string }) => d.id), ['0170-F01', '0170-F02']);
+            assert.doesNotMatch(prompt.text, /TASK-F/);
+        }
+        assert.equal(f.store.state.feedbackDispositionPending, true);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 
@@ -913,4 +939,83 @@ test('swap refuses unfinished tasks and ambiguous assignments without modifying 
         assert.equal(f.h.busy, null);
         assert.equal(f.prompts.length, 0);
     } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('gate notifications retain flow ownership so a new task cannot replace its state', async () => {
+    const f = setup([]);
+    f.store.state.focus = 'implement';
+    let release!: () => void;
+    let ready!: () => void;
+    const entered = new Promise<void>((resolve) => { ready = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const send = f.chat.send.bind(f.chat);
+    f.chat.send = async (text) => { if (text.startsWith('gate passed')) { ready(); await blocked; } await send(text); };
+    try {
+        writeFileSync(join(f.project, 'code.txt'), 'implemented');
+        f.git('add', 'code.txt'); f.git('commit', '-qm', 'Implement');
+        const gate = f.h.gateCommand();
+        await entered;
+        writeFileSync(join(f.project, 'PLAN.md'), '# Plan\n\n## Next\n- 0171-next: next task\n');
+        f.chat.ask = async () => 'start';
+        await assert.rejects(f.h.nextTask(''), /task flow is still running/);
+        await assert.rejects(f.h.continueTurn('implement'), /task flow is still running/);
+        assert.equal(f.store.state.task!.id, '0170-task');
+        release(); await gate;
+        assert.deepEqual(f.prompts.map((p) => p.agent), ['ds', 'glm', 'mm', 'sol']);
+    } finally { release(); await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('explicit stop targets never interrupt a different running role', async () => {
+    const f = setup([]);
+    let interrupted = 0;
+    f.h.live.get('implement')!.interrupt = async () => { interrupted++; };
+    try {
+        f.h.busy = 'implement';
+        await f.h.stop('plan');
+        await f.h.stop('chat');
+        assert.equal(interrupted, 0);
+        await f.h.stop();
+        assert.equal(interrupted, 1);
+    } finally { f.h.busy = null; await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('concurrent background requests reserve a single start before Telegram delivery', async () => {
+    const f = setup([]);
+    let ready!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { ready = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const send = f.chat.send.bind(f.chat);
+    f.chat.send = async (text) => { if (text === '/serve: starting…') { ready(); await blocked; } await send(text); };
+    const command: ProjectCommand = { name: 'serve', cmd: 'sleep 30', description: 'server', confirm: false, background: true, aliases: [] };
+    try {
+        const first = f.h.backgroundCommand(command, '');
+        await entered;
+        await f.h.backgroundCommand(command, '');
+        assert.ok(f.sent.includes('/serve is already starting'));
+        release(); await first;
+        await f.h.backgroundCommand(command, 'stop');
+        assert.equal(f.sent.filter((s) => s === '/serve: starting…').length, 1);
+    } finally { release(); await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('shutdown prevents commands awaiting a Telegram announcement from launching', async () => {
+    for (const background of [false, true]) {
+        const f = setup([]);
+        let ready!: () => void;
+        let release!: () => void;
+        const entered = new Promise<void>((resolve) => { ready = resolve; });
+        const blocked = new Promise<void>((resolve) => { release = resolve; });
+        const marker = join(f.project, 'launched');
+        f.chat.send = async (text) => { if (text === '/serve: starting…' || text === '/serve: running…') { ready(); await blocked; } };
+        const command: ProjectCommand = { name: 'serve', cmd: 'touch launched', description: 'server', confirm: false, background, aliases: [] };
+        try {
+            const launch = background ? f.h.backgroundCommand(command, '') : f.h.oneShotCommand(command, '');
+            await entered;
+            await f.h.shutdown();
+            const rejected = assert.rejects(launch, /shutting down/);
+            release(); await rejected;
+            assert.equal(existsSync(marker), false);
+        } finally { release(); await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+    }
 });

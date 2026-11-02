@@ -311,3 +311,33 @@ test('OpenCode send delivers the failure advisory and persists acknowledgement o
     assert.equal(saved.sessions.root.failureDeliveries!.child.messageId, 'm25');
     assert.deepEqual(await session.pendingWork(), []);
 });
+
+test('rejected OpenCode prompts cancel their waiter and subsequent sends still receive events', async () => {
+    const f = fixture();
+    const adapter = new OpencodeAdapter('http://unused');
+    Object.assign(adapter, { ensureEvents() {} });
+    const internal = adapter as unknown as { waiters: Map<string, unknown>;
+        dispatch(event: { type: string; data: { sessionID: string } }): void };
+    let reject = true;
+    adapter.api = async <T>(method: string, path: string): Promise<T> => {
+        if (path.endsWith('/prompt')) {
+            if (reject) throw new Error('HTTP 503');
+            queueMicrotask(() => internal.dispatch({ type: 'session.execution.succeeded', data: { sessionID: 'root' } }));
+            return { data: { id: 'm25' } } as T;
+        }
+        if (path.includes('/message?order=')) return { data: [{ id: 'm3', type: 'assistant', content: [{ type: 'text', text: 'Done' }] }] } as T;
+        return f.api<T>(method, path);
+    };
+    const session = adapter.resume({ name: 'kimi', tag: 'kimi', model: 'test', harness: 'opencode' }, 'root', {
+        title: 'Task', cwd: '/repo', asker: { permission: async () => 'reject', question: async () => '' },
+    });
+    await assert.rejects(session.send('first'), /HTTP 503/);
+    assert.equal(internal.waiters.size, 0);
+    let resumed = false;
+    adapter.onUnsolicited = () => { resumed = true; };
+    internal.dispatch({ type: 'session.execution.started', data: { sessionID: 'root' } });
+    assert.equal(resumed, true);
+    reject = false;
+    assert.deepEqual(await session.send('second'), { outcome: 'succeeded', error: undefined, text: 'Done' });
+    assert.equal(internal.waiters.size, 0);
+});

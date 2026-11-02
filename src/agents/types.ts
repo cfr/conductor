@@ -78,6 +78,7 @@ export type UnsolicitedEvent =
     | { phase: 'ended'; outcome: TurnResult['outcome']; error?: string };
 
 export interface Adapter {
+    shutdown?(): Promise<void>;
     onUnsolicited?: (sessionId: string, event: UnsolicitedEvent) => void;
     create(agent: AgentConfig, opts: SessionOptions): Promise<AgentSession>;
     resume(agent: AgentConfig, id: string, opts: SessionOptions): AgentSession;

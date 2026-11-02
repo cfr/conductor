@@ -219,13 +219,14 @@ export class OpencodeAdapter implements Adapter {
     }
 
     waitForEnd(sid: string, since: number): Promise<{ outcome: TurnResult['outcome']; error?: string }> {
+        if (this.waiters.has(sid)) throw new Error('OpenCode session is already waiting for a turn');
         return new Promise((resolve) => {
             let done = false;
             const finish = (r: { outcome: TurnResult['outcome']; error?: string }) => {
                 if (!done) {
                     done = true;
                     clearInterval(poll);
-                    this.waiters.delete(sid);
+                    if (this.waiters.get(sid)?.resolve === finish) this.waiters.delete(sid);
                     resolve(r);
                 }
             };
@@ -244,6 +245,10 @@ export class OpencodeAdapter implements Adapter {
                 }
             }, 15000);
         });
+    }
+
+    cancelWaiter(sid: string) {
+        this.waiters.get(sid)?.resolve({ outcome: 'failed', error: 'Prompt submission failed' });
     }
 }
 
@@ -265,11 +270,17 @@ class OpencodeSession implements AgentSession {
         const prompt = await this.work.preparePrompt(text);
         const since = Date.now();
         const end = this.oc.waitForEnd(this.id, since);
-        const sent = await this.oc.api<{ data: { id: string } }>(
-            'POST',
-            `/api/session/${this.id}/prompt`,
-            { text: prompt.text },
-        );
+        let sent: { data: { id: string } };
+        try {
+            sent = await this.oc.api<{ data: { id: string } }>(
+                'POST',
+                `/api/session/${this.id}/prompt`,
+                { text: prompt.text },
+            );
+        } catch (e) {
+            this.oc.cancelWaiter(this.id);
+            throw e;
+        }
         this.work.promptDelivered(prompt, sent.data.id);
         const r = await end;
         return { ...r, text: await this.replyAfter(sent.data.id) };

@@ -114,9 +114,9 @@ export class Chat implements Messenger {
         });
         this.bot.on('message:text', (ctx) => {
             const text = ctx.message.text;
-            const cmd = /^\/([a-z_-]+)(?:@\w+)?(?:\s+([\s\S]*))?$/i.exec(text);
+            const cmd = /^\/([a-z][a-z0-9_]*)(?:@\w+)?(?:\s+([\s\S]*))?$/i.exec(text);
             if (cmd) {
-                const name = cmd[1].toLowerCase().replace(/_/g, '-');
+                const name = cmd[1].toLowerCase();
                 const handler = this.commands.get(name);
                 if (!handler) {
                     void this.send(`unknown command /${name}; try /help`);

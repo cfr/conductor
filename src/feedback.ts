@@ -36,13 +36,19 @@ original is resolved. An overall clean verdict alone does not verify a finding. 
 evidence; honor the recorded reason. Investigate until an issue is demonstrated, then report it without
 repeated speculative probes. End with exactly VERDICT: clean or VERDICT: findings, matching the JSON.`;
 
-export const dispositionContract = `Answer every requested finding ID exactly once in a readable reply plus:
+export function dispositionContract(ids: readonly string[]): string {
+    const example = JSON.stringify({ dispositions: ids.map((id) => ({
+        id, status: 'fixed', reason: 'What changed and regression evidence',
+    })) }, null, 2);
+    return `Answer every requested finding ID exactly once in a readable reply plus:
 \`\`\`conductor-dispositions
-{"dispositions":[{"id":"TASK-F01","status":"fixed","reason":"What changed and regression evidence"}]}
+${example}
 \`\`\`
+Keep these exact IDs. Choose each actual status and replace the example reasons with evidence.
 Statuses: fixed, rejected, deferred. Explain every disposition. A fixed claim requires a new commit.
 Conductor records the actual commits made during this repair; do not invent commit hashes. Do not amend
 or rebase earlier commits. Keep related bugs and test gaps separately identified.`;
+}
 
 export class FeedbackTracker {
     readonly records: FindingStore;
@@ -96,7 +102,7 @@ export class FeedbackTracker {
         const requested = role === 'review' && state.sessions.review?.fixingFindings
             ? state.sessions.review.findingIds : role === 'implement' ? state.feedbackFindingIds : undefined;
         if (requested?.length) {
-            extra.push(`Requested IDs: ${requested.join(', ')}`, this.summary(), dispositionContract);
+            extra.push(`Requested IDs: ${requested.join(', ')}`, this.summary(), dispositionContract(requested));
         }
         return extra.join('\n\n');
     }

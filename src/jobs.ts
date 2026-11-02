@@ -26,34 +26,30 @@ export function logTail(file: string, lines: number): string {
     }
 }
 
-function groupAlive(pgid: number): boolean {
+export function groupAlive(pgid: number): boolean {
     try {
         process.kill(-pgid, 0);
         return true;
-    } catch {
-        return false;
+    } catch (e) {
+        return (e as NodeJS.ErrnoException).code !== 'ESRCH';
     }
 }
 
-async function killGroup(pgid: number, exited: Promise<unknown>) {
+export async function killGroup(pgid: number, graceMs = 3000) {
     try {
         process.kill(-pgid, 'SIGTERM');
-    } catch {
+    } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
         return;
     }
-    const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 5000));
-    if ((await Promise.race([exited, timeout])) === 'timeout') {
+    const deadline = Date.now() + graceMs;
+    while (groupAlive(pgid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    if (groupAlive(pgid)) {
         try {
             process.kill(-pgid, 'SIGKILL');
-        } catch {
-            // already gone
+        } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
         }
-    }
-}
-
-async function groupGone(pgid: number) {
-    while (groupAlive(pgid)) {
-        await new Promise((r) => setTimeout(r, 100));
     }
 }
 
@@ -98,7 +94,7 @@ export class Jobs {
             const file = join(this.dir, f);
             const pgid = Number(readLog(file).trim());
             if (!this.jobs.has(name) && Number.isSafeInteger(pgid) && pgid > 1 && groupAlive(pgid)) {
-                await killGroup(pgid, groupGone(pgid));
+                await killGroup(pgid);
                 reaped.push(name);
             }
             if (!this.jobs.has(name)) {
@@ -113,24 +109,29 @@ export class Jobs {
     }
 
     run(name: string, cmd: string, cwd: string): Promise<{ code: number; log: string }> {
-        const log = this.logFile(name);
-        const child = spawnToLog(cmd, cwd, log);
         return new Promise((resolve, reject) => {
-            child.on('error', reject);
-            child.on('exit', (code, signal) => resolve({ code: code ?? (signal ? 128 : -1), log }));
+            const job = this.start(name, cmd, cwd, (j, code) => resolve({ code: code ?? 128, log: j.log }));
+            job.child.once('error', reject);
         });
     }
 
     start(name: string, cmd: string, cwd: string, onExit: (job: Job, code: number | null) => void): Job {
+        if (this.jobs.has(name)) throw new Error(`/${name} is already running`);
         const log = this.logFile(name);
         const job: Job = { name, child: spawnToLog(cmd, cwd, log), started: Date.now(), log, stopping: false };
         this.jobs.set(name, job);
         if (job.child.pid) {
             writeFileSync(this.pidFile(name), `${job.child.pid}\n`);
         }
-        job.child.on('exit', (code) => {
+        const forget = () => {
+            if (this.jobs.get(name) !== job) return;
             this.jobs.delete(name);
             rmSync(this.pidFile(name), { force: true });
+        };
+        job.child.once('error', () => forget());
+        job.child.on('exit', (code) => {
+            // Keep ownership while stop() finishes cleaning up surviving descendants.
+            if (!job.stopping && (!job.child.pid || !groupAlive(job.child.pid))) forget();
             onExit(job, code);
         });
         return job;
@@ -142,7 +143,11 @@ export class Jobs {
             return false;
         }
         job.stopping = true;
-        await killGroup(job.child.pid, new Promise<void>((r) => job.child.once('exit', () => r())));
+        await killGroup(job.child.pid);
+        if (this.jobs.get(name) === job) {
+            this.jobs.delete(name);
+            rmSync(this.pidFile(name), { force: true });
+        }
         return true;
     }
 

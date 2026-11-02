@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HttpError } from 'grammy';
+import { HttpError, type Bot } from 'grammy';
 import { Chat, describeError, retryNetwork } from '../src/telegram.ts';
 
 const dropped = () =>
@@ -59,4 +59,20 @@ test('empty attachments send a routed explanation instead of an invalid document
     assert.equal(documents.length, 1);
     assert.deepEqual(documents[0][2], { caption: 'Changes' });
     assert.equal((chat as unknown as { routes: Map<number, string> }).routes.get(100), 'review');
+});
+
+test('configured commands with digits and underscores route as commands, never agent text', async () => {
+    const chat = new Chat('123:test', 123);
+    const bot = (chat as unknown as { bot: Bot }).bot;
+    Object.assign(bot, { botInfo: { id: 1, is_bot: true, first_name: 'Test', username: 'test_bot' } });
+    const calls: string[] = [];
+    chat.send = async (text) => { calls.push('notice:' + text); };
+    chat.onText = async (text) => { calls.push('agent:' + text); };
+    for (const name of ['serve2', 'deploy_prod']) chat.command(name, async (args) => { calls.push(`${name}:${args}`); });
+    for (const [i, text] of ['/serve2 --port 1', '/deploy_prod@test_bot now'].entries()) {
+        await bot.handleUpdate({ update_id: i, message: { message_id: i, date: 1,
+            chat: { id: 123, type: 'private', first_name: 'User' },
+            from: { id: 123, is_bot: false, first_name: 'User' }, text } });
+    }
+    assert.deepEqual(calls, ['serve2:--port 1', 'deploy_prod:now']);
 });

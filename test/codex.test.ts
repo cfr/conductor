@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAdapter } from '../src/agents/codex.ts';
@@ -82,4 +83,67 @@ test('Codex config accepts effort and rejects Claude permission modes', () => {
     assert.equal(parseProjectConfig('/r', base).agents.get('codex')?.effort, 'xhigh');
     assert.throws(() => parseProjectConfig('/r', base + 'permission_mode="auto"'), /permission_mode/);
     assert.throws(() => parseProjectConfig('/r', base.replace('xhigh', 'max')), /effort/);
+});
+
+test('Codex process ownership survives host exit and shutdown prevents additional turns', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'conductor-codex-owner-'));
+    const executable = join(dir, 'fake-codex');
+    const pidFile = join(dir, 'pid');
+    const module = new URL('../src/agents/codex.ts', import.meta.url).href;
+    writeFileSync(executable, `#!/usr/bin/env node
+require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
+console.log(JSON.stringify({type:'thread.started',thread_id:'test'}));setInterval(()=>{},1000);
+`, { mode: 0o700 });
+    const host = join(dir, 'host.mjs');
+    const state = join(dir, 'state');
+    writeFileSync(host, `import {CodexAdapter} from ${JSON.stringify(module)};import {writeFileSync} from 'node:fs';
+const a=new CodexAdapter(${JSON.stringify(state)},${JSON.stringify(executable)});
+const s=await a.create(${JSON.stringify(agent)},{title:'t',cwd:${JSON.stringify(dir)},asker:{}});
+writeFileSync(${JSON.stringify(join(dir, 'id'))},s.id);void s.send('hello');setTimeout(()=>process.exit(0),600);`);
+    let recovered: ReturnType<CodexAdapter['resume']> | undefined;
+    let pid: number | undefined;
+    try {
+        const hostProcess = spawn(process.execPath, [host], { stdio: 'ignore' });
+        await new Promise<void>((resolve, reject) => { hostProcess.once('error', reject); hostProcess.once('exit', () => resolve()); });
+        assert.ok(existsSync(pidFile));
+        pid = Number(readFileSync(pidFile, 'utf8'));
+        const adapter = new CodexAdapter(state, executable);
+        recovered = adapter.resume(agent, readFileSync(join(dir, 'id'), 'utf8'), { title: 't', cwd: dir, asker });
+        assert.deepEqual(await recovered.turnState(0), { running: true });
+        assert.equal((await recovered.pendingWork()).length, 1);
+        await assert.rejects(recovered.send('another turn'), /still running/);
+        await adapter.shutdown();
+        assert.equal((await recovered.turnState(0)).running, false);
+        assert.deepEqual(await recovered.pendingWork(), []);
+        await assert.rejects(recovered.send('after shutdown'), /closed/);
+        await assert.rejects(adapter.create(agent, { title: 't', cwd: dir, asker }), /shutting down/);
+    } finally {
+        if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch {} }
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('Codex shutdown interrupts a live turn and closes every session', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'conductor-codex-shutdown-'));
+    const executable = join(dir, 'fake-codex');
+    const pidFile = join(dir, 'pid');
+    writeFileSync(executable, `#!/usr/bin/env node
+require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
+setInterval(()=>{},1000);
+`, { mode: 0o700 });
+    const adapter = new CodexAdapter(join(dir, 'state'), executable);
+    try {
+        const opts = { title: 't', cwd: dir, asker };
+        const active = await adapter.create(agent, opts);
+        const idle = await adapter.create(agent, opts);
+        const running = active.send('hello');
+        for (let n = 0; n < 150 && !existsSync(pidFile); n++) await new Promise((r) => setTimeout(r, 20));
+        assert.ok(existsSync(pidFile));
+        await adapter.shutdown();
+        assert.equal((await running).outcome, 'interrupted');
+        assert.equal((await active.turnState(0)).running, false);
+        assert.deepEqual(await active.pendingWork(), []);
+        assert.equal(JSON.parse(readFileSync(join(dir, 'state', `${active.id}.json`), 'utf8')).process, undefined);
+        await assert.rejects(idle.send('after shutdown'), /closed/);
+    } finally { await adapter.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });

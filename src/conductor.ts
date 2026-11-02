@@ -15,7 +15,7 @@ import {
     type Role,
     type SessionRole,
 } from './config.ts';
-import { FeedbackTracker, feedbackContract, dispositionContract, commitGuidance } from './feedback.ts';
+import { FeedbackTracker, feedbackContract, commitGuidance } from './feedback.ts';
 import { escapeHtml } from './format.ts';
 import { Jobs, logTail, readLog } from './jobs.ts';
 import { renderMarkdown, usageMetadata } from './logs/markdown.ts';
@@ -77,6 +77,8 @@ export class Conductor {
     private drainingWork = false;
     private recoveringWork = false;
     private summaryBusy = false;
+    private startingCommands = new Set<string>();
+    private shuttingDown = false;
     private jobs: Jobs;
     private local: LocalConfig;
     private store: Store;
@@ -155,13 +157,16 @@ export class Conductor {
     }
 
     private async oneShotCommand(c: ProjectCommand, args: string) {
+        this.requireIdleFlow();
         const cmd = this.commandLine(c, args);
         if (c.confirm && (await this.chat.ask(`Run /${c.name}?\n\n$ ${cmd}`, ['run', 'cancel'], false)) !== 'run') {
             return;
         }
+        this.requireIdleFlow();
         this.claim(`/${c.name}`);
         try {
             await this.chat.send(`/${c.name}: running…`);
+            if (this.shuttingDown) throw new Error('conductor is shutting down');
             const started = Date.now();
             const r = await this.jobs.run(c.name, cmd, this.project.root);
             const secs = ((Date.now() - started) / 1000).toFixed(0);
@@ -177,6 +182,11 @@ export class Conductor {
     }
 
     private async backgroundCommand(c: ProjectCommand, args: string) {
+        if (this.shuttingDown) throw new Error('conductor is shutting down');
+        if (this.startingCommands.has(c.name)) {
+            await this.chat.send(`/${c.name} is already starting`);
+            return;
+        }
         const running = this.jobs.get(c.name);
         if (args === 'stop') {
             if (!(await this.jobs.stop(c.name))) {
@@ -191,43 +201,49 @@ export class Conductor {
             return;
         }
         const cmd = this.commandLine(c, args === 'status' ? '' : args);
-        if (c.confirm && (await this.chat.ask(`Start /${c.name}?\n\n$ ${cmd}`, ['start', 'cancel'], false)) !== 'start') {
-            return;
-        }
-        await this.chat.send(`/${c.name}: starting…`);
-        const job = this.jobs.start(c.name, cmd, this.project.root, (j, code) => {
-            const how = j.stopping ? 'stopped' : `exited (code ${code})`;
-            void this.chat.sendLog(`/${c.name}: ${how}`, logTail(j.log, 15));
-        });
-        if (!c.ready) {
-            setTimeout(() => {
-                if (this.jobs.get(c.name) === job) {
-                    void this.chat.sendLog(`/${c.name}: running (pid ${job.child.pid})`, logTail(job.log, 15));
-                }
-            }, 5000);
-            return;
-        }
-        const ready = c.ready;
-        const poll = setInterval(() => {
-            if (this.jobs.get(c.name) !== job) {
-                clearInterval(poll);
+        this.startingCommands.add(c.name);
+        try {
+            if (c.confirm && (await this.chat.ask(`Start /${c.name}?\n\n$ ${cmd}`, ['start', 'cancel'], false)) !== 'start') {
                 return;
             }
-            const log = readLog(job.log);
-            const m = ready.exec(log);
-            if (m) {
-                clearInterval(poll);
-                // the matched line and what follows it, e.g. a URL list
-                const fromMatch = log.slice(log.lastIndexOf('\n', m.index) + 1).trimEnd().split('\n').slice(0, 15);
-                void this.chat.sendLog(`/${c.name}: ready (pid ${job.child.pid})`, fromMatch.join('\n'));
+            await this.chat.send(`/${c.name}: starting…`);
+            if (this.shuttingDown) throw new Error('conductor is shutting down');
+            const job = this.jobs.start(c.name, cmd, this.project.root, (j, code) => {
+                const how = j.stopping ? 'stopped' : `exited (code ${code})`;
+                void this.chat.sendLog(`/${c.name}: ${how}`, logTail(j.log, 15));
+            });
+            this.startingCommands.delete(c.name);
+            if (!c.ready) {
+                setTimeout(() => {
+                    if (this.jobs.get(c.name) === job) {
+                        void this.chat.sendLog(`/${c.name}: running (pid ${job.child.pid})`, logTail(job.log, 15));
+                    }
+                }, 5000);
+                return;
             }
-        }, 1000);
+            const ready = c.ready;
+            const poll = setInterval(() => {
+                if (this.jobs.get(c.name) !== job) {
+                    clearInterval(poll);
+                    return;
+                }
+                const log = readLog(job.log);
+                const m = ready.exec(log);
+                if (m) {
+                    clearInterval(poll);
+                    // the matched line and what follows it, e.g. a URL list
+                    const fromMatch = log.slice(log.lastIndexOf('\n', m.index) + 1).trimEnd().split('\n').slice(0, 15);
+                    void this.chat.sendLog(`/${c.name}: ready (pid ${job.child.pid})`, fromMatch.join('\n'));
+                }
+            }, 1000);
+        } finally { this.startingCommands.delete(c.name); }
     }
 
     async shutdown() {
+        this.shuttingDown = true;
         if (this.workPoll) clearInterval(this.workPoll);
         this.workPoll = undefined;
-        await this.jobs.stopAll();
+        await Promise.all([this.jobs.stopAll(), ...Object.values(this.adapters).map((a) => a.shutdown?.())]);
     }
 
     private get state() {
@@ -356,6 +372,7 @@ export class Conductor {
     }
 
     private claim(what: Busy) {
+        if (this.shuttingDown) throw new Error('conductor is shutting down');
         if (this.recoveringWork) throw new Error('recovering session work; try again after /status');
         const waiting = this.waitingRole();
         if (waiting && waiting !== what) throw new Error(`${waiting} still has pending work; /status or /continue ${waiting}`);
@@ -363,6 +380,10 @@ export class Conductor {
             throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
         }
         this.busy = what;
+    }
+
+    private requireIdleFlow() {
+        if (this.flowing) throw new Error('task flow is still running; wait for it to settle');
     }
 
     private parseArgs(args: string): { agent?: string; id?: string; rest: string } {
@@ -382,6 +403,7 @@ export class Conductor {
     }
 
     private async nextTask(args: string) {
+        this.requireIdleFlow();
         this.requireSettledWork();
         this.reload();
         const { agent: agentArg, id } = this.parseArgs(args);
@@ -449,6 +471,7 @@ export class Conductor {
     }
 
     private async review(args: string) {
+        this.requireIdleFlow();
         this.reload();
         const { agent, id } = this.parseArgs(args);
         if (id && id !== this.state.task?.id && idNumber(id) !== this.state.task?.number) {
@@ -538,6 +561,7 @@ export class Conductor {
     }
 
     private async feedbackCommand(args: string) {
+        this.requireIdleFlow();
         this.reload();
         const { agent } = this.parseArgs(args);
         const name = agent ?? this.nextFeedbackAgent() ?? this.project.roles.feedback.at(-1);
@@ -553,6 +577,7 @@ export class Conductor {
     }
 
     private async skipFeedback() {
+        if (this.flowing && !this.busy && !this.state.sessions.feedback?.workWait) this.requireIdleFlow();
         this.reload();
         const ref = this.state.sessions.feedback;
         if (!ref || this.state.focus !== 'feedback' || this.state.feedbackDispositionPending) {
@@ -701,7 +726,7 @@ export class Conductor {
         this.store.save();
         await this.turn(role,
             `Your disposition report is incomplete: ${receipt.error}. Return the complete dispositions for the requested IDs. ` +
-            `Do not edit files or commit during this correction.\n\n${dispositionContract}`,
+            'Do not edit files or commit during this correction.',
             'completing feedback dispositions');
         return false;
     }
@@ -748,6 +773,7 @@ export class Conductor {
     private async continueTurn(args: string) {
         const words = args.trim().split(/\s+/).filter(Boolean);
         const role = words[0] && roles.includes(words[0]) ? (words.shift() as Role) : this.state.focus;
+        if (role !== 'plan') this.requireIdleFlow();
         if (!role || !this.state.sessions[role]) {
             await this.chat.send(role ? `no ${role} session` : 'no session to continue');
             return;
@@ -759,24 +785,30 @@ export class Conductor {
     }
 
     private async fix(notes: string) {
+        this.requireIdleFlow();
         if (!this.state.sessions.review) {
             await this.chat.send('no review session; /review first');
             return;
         }
         if (this.busy) throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
-        this.state.taskComplete = false;
-        const ref = this.state.sessions.review;
-        if (ref.findingIds?.length) {
-            ref.fixBase = await repo.head(this.project.root);
-            ref.fixingFindings = true;
-            ref.dispositionPending = true;
-            ref.dispositionRetried = undefined;
-            this.store.save();
+        this.flowing++;
+        try {
+            this.state.taskComplete = false;
+            const ref = this.state.sessions.review;
+            if (ref.findingIds?.length) {
+                ref.fixBase = await repo.head(this.project.root);
+                ref.fixingFindings = true;
+                ref.dispositionPending = true;
+                ref.dispositionRetried = undefined;
+                this.store.save();
+            }
+            const p = this.project.prompts;
+            const text = notes ? fill(p.fixNotes, this.vars({ notes })) : fill(p.fix, this.vars());
+            this.state.focus = 'review';
+            await this.turn('review', text, `fixing ${this.state.task?.id ?? 'review findings'}`);
+        } finally {
+            this.flowing--;
         }
-        const p = this.project.prompts;
-        const text = notes ? fill(p.fixNotes, this.vars({ notes })) : fill(p.fix, this.vars());
-        this.state.focus = 'review';
-        await this.turn('review', text, `fixing ${this.state.task?.id ?? 'review findings'}`);
     }
 
     private async plan(args: string) {
@@ -1054,6 +1086,7 @@ export class Conductor {
             return;
         }
         const role = route ?? this.state.focus;
+        if (role !== 'plan') this.requireIdleFlow();
         if (!role || !this.state.sessions[role]) {
             await this.chat.send('no session to talk to; /next, /review or /plan');
             return;
@@ -1472,6 +1505,7 @@ export class Conductor {
     }
 
     private async gateCommand() {
+        this.requireIdleFlow();
         const role = this.state.focus;
         const ref = role ? this.state.sessions[role] : undefined;
         if (!role || !ref || role === 'plan' || role === 'feedback') {
@@ -1484,17 +1518,21 @@ export class Conductor {
         }
         const waiting = this.waitingRole();
         if (waiting) throw new Error(`${waiting} still has pending work; wait before /gate`);
-        const root = this.project.root;
-        if ((await repo.commitsSince(root, ref.startSha)).length === 0) {
-            await this.chat.send(`${this.prefix(role)} has no commits since its session started`);
-            return;
-        }
         if (this.busy) {
             throw new Error(`busy: ${this.busy} is running (/status, /stop)`);
         }
-        ref.checkedSha = await repo.head(root);
-        this.store.save();
-        await this.gate(role, ref.startSha, 0);
+        this.flowing++;
+        try {
+            const root = this.project.root;
+            if ((await repo.commitsSince(root, ref.startSha)).length === 0) {
+                await this.chat.send(`${this.prefix(role)} has no commits since its session started`);
+                return;
+            }
+            ref.checkedSha = await repo.head(root);
+            this.store.save();
+            await this.gate(role, ref.startSha, 0);
+        }
+        finally { this.flowing--; }
     }
 
     private async checkPlanOnly() {
@@ -1641,13 +1679,30 @@ export class Conductor {
     }
 
     private async stop(args = '') {
+        if (args && args !== 'plan' && args !== 'chat') throw new Error('usage: /stop [chat|plan]');
+        if (args === 'chat') {
+            if (this.chatBusy) {
+                await this.interruptSession('chat');
+                await this.chat.send(`interrupt sent to ${this.prefix('chat')}`);
+            }
+            else await this.chat.send('chat is not running');
+            return;
+        }
+        if (args === 'plan') {
+            if (this.planBusy || this.state.sessions.plan?.workWait) {
+                await this.interruptSession('plan');
+                await this.chat.send(`interrupt sent to ${this.prefix('plan')}`);
+            }
+            else await this.chat.send('plan is not running');
+            return;
+        }
         const busy = this.busy ?? this.waitingRole();
-        if (this.chatBusy && (args === 'chat' || !busy)) {
+        if (this.chatBusy && !busy) {
             await this.interruptSession('chat');
             await this.chat.send(`interrupt sent to ${this.prefix('chat')}`);
             return;
         }
-        if (this.planBusy && (args === 'plan' || !busy || busy === 'plan')) {
+        if (this.planBusy && (!busy || busy === 'plan')) {
             await this.interruptSession('plan');
             await this.chat.send(`interrupt sent to ${this.prefix('plan')}`);
             return;

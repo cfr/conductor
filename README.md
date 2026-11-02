@@ -134,7 +134,7 @@ literal `\n` sequences in quoted `-m` arguments. Earlier commits are not rewritt
 | `/chat stop` | Close that chat; its log stays. |
 | `/summary [role] [agent]` | Ask a fresh read-only session to summarize a session log. |
 | `/status` | Show the task, running/pending work, sessions, and last gate. |
-| `/stop [chat\|plan]` | Interrupt a running agent, chat, or planner. |
+| `/stop [chat\|plan]` | Interrupt the active agent; an explicit target stops only that chat or planner. |
 | `/agents` | List configured agent aliases and models. |
 | `/roles` | Show configured role defaults and current task assignments. |
 | `/roles <role> <agents...>` | Edit role defaults while no task or session is in progress. |
@@ -181,12 +181,16 @@ aliases = ["server"]
 
 `/serve` and `/server` control the same process; either name accepts `stop`. Aliases appear in
 help but are omitted from the command menu. Text after a command is appended to its shell command.
+Names and aliases accept lowercase letters, digits, and underscores, starting with a letter
+(for example, `/serve2` or `/deploy_prod`).
 
 `confirm = true` adds a confirmation button. One-shot commands wait for agent/gate work to be
 idle and report exit status and output. Background commands return their status when sent again;
 `ready` is an optional output regex used to report readiness, otherwise output is sampled after
-five seconds. Conductor stops process groups on exit and reaps leftover managed processes at
-startup using PID records. Logs and PID records live under `commands/` beside the state file.
+five seconds. Concurrent starts of the same background command are refused. Conductor tracks
+both one-shot and background commands, stops their process groups on exit, and reaps leftovers
+at startup using PID records. Descendants that ignore the stop signal are killed after a grace
+period. Logs and PID records live under `commands/` beside the state file.
 
 ## Pending work and recovery
 
@@ -254,9 +258,12 @@ automation pauses. After pending work settles, `/gate` verifies the current tree
 feedback; an older green result does not clear the conflict.
 
 After a restart, opencode turns can still be running and are followed through completion. Claude
-turns are reported as interrupted because their SDK process stops with conductor. Unfinished
-Codex turns are also marked interrupted; `/continue` resumes the saved thread. Codex exec does
-not expose detached-job notifications to this adapter.
+turns are reported as interrupted because their SDK process stops with conductor. Graceful
+shutdown stops managed Codex process groups, including chat and summary sessions. After a crash,
+persisted Codex process groups remain pending while alive; `/stop` ends them before `/continue`
+resumes the saved thread. Recovered processes are signalled only when their recorded identity
+matches; unknown ownership keeps the session blocked. Codex exec does not expose detached-job
+notifications to this adapter.
 
 ## Findings and verification
 
@@ -313,6 +320,8 @@ Malformed or incomplete reports get one correction turn, then pause. Partial JSO
 the raw reply remains recorded as pending. Retry budgets survive restarts. Use `/continue feedback`,
 `/continue implement`, or `/continue review` to finish the corresponding report. `/gate` cannot
 advance while dispositions are incomplete.
+Repair and correction prompts include a disposition example with every actual requested finding
+ID, so agents can fill in statuses and evidence without substituting placeholder IDs.
 
 ## Logs, usage, and state
 
