@@ -138,6 +138,7 @@ literal `\n` sequences in quoted `-m` arguments. Earlier commits are not rewritt
 | `/agents` | List configured agent aliases and models. |
 | `/roles` | Show configured role defaults and current task assignments. |
 | `/roles <role> <agents...>` | Edit role defaults while no task or session is in progress. |
+| `/swap <agent1> <agent2>` | Exchange two uniquely assigned role defaults. |
 | `/agent <alias>` | Hand off the current task's focused role, then wait for `/continue`. |
 | `/log` | Export session logs and the current finding summary. |
 | `/help` | Show commands, including configured project commands. |
@@ -200,9 +201,16 @@ Use `/agents` to find the configured aliases. For example:
 
 Role edits require an idle workflow and no unfinished task, including a stopped task. They update
 only the selected assignment in the tracked `CONDUCTOR.toml`, show the diff, and offer **commit**,
-**keep** (uncommitted), or **discard**. Existing uncommitted config edits must be resolved first;
-committing role changes excludes unrelated staged work. Normal configuration inheritance still
-applies, and an explicit `[flow] feedback_rounds` remains unchanged.
+**keep** (uncommitted), or **discard**. Kept role changes can be combined: change the implementer,
+choose keep, then change feedback and choose commit to commit both. Discard restores the state
+before the latest request, retaining earlier kept changes. Uncommitted edits outside role defaults
+must be resolved first; committing role changes excludes unrelated staged work. Normal configuration
+inheritance still applies, and an explicit `[flow] feedback_rounds` remains unchanged.
+
+`/swap glm k3` exchanges their configured assignments in one edit, with the same idle-workflow
+checks and commit / keep / discard choices. Each alias must occur exactly once across effective
+roles, including feedback positions and inherited chat/summary defaults. Missing or ambiguous
+assignments are rejected with their locations. Other feedback entries retain their order.
 
 During a task, `/agent sol` stops the focused session and its owned work, then creates a fresh
 session for that role. It preserves the task base, commits, uncommitted files, feedback round,

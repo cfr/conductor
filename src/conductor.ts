@@ -24,7 +24,7 @@ import { git, tail } from './proc.ts';
 import * as repo from './repo.ts';
 import type { SessionRef, State, Store } from './state.ts';
 import { describeError, type Messenger } from './telegram.ts';
-import { defaultRoles, editRoleDefaults } from './roles.ts';
+import { defaultRoles, editRoleDefaults, onlyRoleChanges, swapRoleDefaults } from './roles.ts';
 
 type Busy = Role | 'gate' | `/${string}` | null;
 
@@ -45,6 +45,7 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /plan done - write the agreed items, then commit / keep / discard
 /agents - configured agent aliases and models
 /roles [role agents...] - show defaults or edit them while no task is in progress
+/swap <agent1> <agent2> - exchange two uniquely assigned role defaults
 /agent <alias> - hand off the current task's focused role; /continue to resume
 /status - current task, step, sessions, last gate
 /stop [chat] - interrupt the running agent (or the chat)
@@ -108,6 +109,7 @@ export class Conductor {
         chat.command('summary', (a) => this.summary(a));
         chat.command('agents', async () => { this.reload(); await chat.send(this.agentList()); });
         chat.command('roles', (a) => this.rolesCommand(a));
+        chat.command('swap', (a) => this.swapCommand(a));
         chat.command('agent', (a) => this.agentCommand(a));
         chat.command('status', async () => chat.sendHtml(this.status()));
         chat.command('stop', (a) => this.stop(a));
@@ -1710,6 +1712,17 @@ export class Conductor {
         this.reload();
         const [role, ...names] = args.trim().split(/\s+/).filter(Boolean);
         if (!role) { await this.chat.send(this.roleList()); return; }
+        await this.changeRoleDefaults('/roles', (text) => editRoleDefaults(this.project.root, text, role, names));
+    }
+
+    private async swapCommand(args: string) {
+        const names = args.trim().split(/\s+/).filter(Boolean);
+        if (names.length !== 2) throw new Error('usage: /swap <agent1> <agent2>');
+        await this.changeRoleDefaults('/swap', (text) => swapRoleDefaults(this.project.root, text, names[0], names[1]));
+    }
+
+    private async changeRoleDefaults(command: '/roles' | '/swap', edit: (text: string) => string) {
+        this.reload();
         if (this.taskInProgress() || this.runningTask() || this.planBusy || this.chatBusy || this.summaryBusy ||
             Object.values(this.state.sessions).some((ref) => ref.turn || ref.workWait || ref.swapRequested)) {
             throw new Error('a task or session is still in progress; finish it before changing role defaults');
@@ -1717,12 +1730,10 @@ export class Conductor {
         const root = this.project.root;
         const file = join(root, 'CONDUCTOR.toml');
         const original = readFileSync(file, 'utf8');
-        const proposal = editRoleDefaults(root, original, role, names);
-        if (JSON.stringify(parseProjectConfig(root, proposal).roles) === JSON.stringify(this.project.roles)) {
-            await this.chat.send('role defaults are unchanged');
-            return;
-        }
-        this.claim('/roles');
+        const edited = edit(original);
+        const proposal = JSON.stringify(parseProjectConfig(root, edited).roles) === JSON.stringify(this.project.roles)
+            ? original : edited;
+        this.claim(command);
         try {
             for (const [name, ref] of Object.entries(this.state.sessions)) {
                 const session = this.session(name as SessionRole);
@@ -1730,11 +1741,16 @@ export class Conductor {
                 if (status.running || work.length) throw new Error(`${name} still has pending work; finish it before changing defaults`);
             }
             await git(root, 'ls-files', '--error-unmatch', '--', 'CONDUCTOR.toml');
-            if ((await repo.fileDiff(root, 'CONDUCTOR.toml')).trim()) {
-                throw new Error('CONDUCTOR.toml already has uncommitted changes; commit or discard those first');
-            }
             const head = await repo.head(root);
-            if (readFileSync(file, 'utf8') !== original) throw new Error('CONDUCTOR.toml changed; retry /roles');
+            const committed = await git(root, 'show', `${head}:CONDUCTOR.toml`);
+            if (committed !== original && !onlyRoleChanges(committed, original)) {
+                throw new Error('CONDUCTOR.toml already has uncommitted changes outside role defaults; commit or discard those first');
+            }
+            if (proposal === original && !(await repo.fileDiff(root, 'CONDUCTOR.toml')).trim()) {
+                await this.chat.send('role defaults are unchanged');
+                return;
+            }
+            if (readFileSync(file, 'utf8') !== original) throw new Error(`CONDUCTOR.toml changed; retry ${command}`);
             writeFileSync(file, proposal);
             this.reload();
             await this.chat.sendFile('CONDUCTOR.diff', await repo.fileDiff(root, 'CONDUCTOR.toml'), this.roleList());
@@ -1744,7 +1760,7 @@ export class Conductor {
             else if (choice === 'commit') {
                 if (await repo.head(root) !== head) throw new Error('HEAD moved during confirmation; role changes are kept uncommitted');
                 await git(root, 'add', '--', 'CONDUCTOR.toml');
-                await git(root, 'commit', '--only', '-m', `Update ${role} role defaults`,
+                await git(root, 'commit', '--only', '-m', 'Update role defaults',
                     '-m', 'Co-Authored-By: Codex <noreply@openai.com>', '--', 'CONDUCTOR.toml');
             }
             this.reload();

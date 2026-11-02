@@ -140,7 +140,9 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
 - `/roles [role agents...]`: show defaults and current assignments, or edit one default in the
   tracked `CONDUCTOR.toml` when no task or session is in progress. Show the diff and offer
   commit / keep / discard; commits include only that config file. Scalar roles take one alias,
-  feedback takes an ordered list. Preserve unrelated config, comments and explicit flow settings.
+  feedback takes an ordered list. Kept role-only edits accumulate across commands and restarts;
+  committing a later edit commits the whole batch, while discard undoes only the latest request.
+  Reject unrelated config changes. Preserve unrelated config, comments and explicit flow settings.
 - `/agent <alias>`: hand off the current task's focused role without changing defaults. Stop the
   old session and its owned work; preserve task/finding/gate metadata and the working tree. Wait
   for live or queued work, but transfer terminal child results with their failure status. Persist
@@ -148,6 +150,10 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
   `/continue`. No model turn starts at swap time. Unexpected retired-session resumes are stopped
   and require a fresh verification gate. Current assignments show `old -> new`; feedback defaults
   remain space-separated.
+- `/swap <agent1> <agent2>`: exchange exactly one assignment for each alias, including individual
+  feedback positions. Count effective inherited roles when checking uniqueness; reject unknown,
+  missing or multiply assigned aliases. Use the same idle checks and single diff/confirmation as
+  `/roles`, preserving unrelated configuration and accumulated kept role changes.
 - `/status`: current task, step, which agent is running, last gate result
 - `/stop [chat|plan]`: interrupt the running agent (or the chat, or the planner)
 - `/log`: export the current sessions to `wlog/` now

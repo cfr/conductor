@@ -30,6 +30,7 @@ interface Harness {
     skipFeedback(): Promise<void>;
     runFeedback(agent: string): Promise<void>;
     rolesCommand(args: string): Promise<void>;
+    swapCommand(args: string): Promise<void>;
     agentCommand(args: string): Promise<void>;
     roleList(): string;
     agentList(): string;
@@ -823,6 +824,93 @@ test('failed handoff restores the old session and a retired resume cannot silent
         assert.equal(stopped, true);
         assert.match(f.store.state.workConflict!, /retired implement session/);
         assert.equal(f.store.state.sessions.implement!.id, newId);
+        assert.equal(f.prompts.length, 0);
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('kept role changes accumulate across restart and commit together', async () => {
+    const f = setup([]);
+    f.store.state.task = undefined;
+    f.store.save();
+    let restored: Harness | undefined;
+    const config = join(f.project, 'CONDUCTOR.toml');
+    const diffs: string[] = [];
+    f.chat.sendFile = async (_name, content) => { diffs.push(content); };
+    try {
+        f.chat.ask = async () => 'keep';
+        await f.h.rolesCommand('implement sol');
+        assert.match(readFileSync(config, 'utf8'), /implement = "sol"/);
+        assert.equal(f.git('log', '-1', '--format=%s'), 'Initial');
+        await f.h.shutdown();
+        const store = new Store(f.local.stateFile);
+        restored = new Conductor(f.local, store, f.chat) as unknown as Harness;
+        restored.adapters = { codex: f.adapter, opencode: f.adapter, claude: f.adapter };
+        restored.live.set('implement', f.h.live.get('implement')!);
+        f.chat.ask = async () => 'commit';
+        await restored.rolesCommand('feedback mm ds');
+        const committed = f.git('show', 'HEAD:CONDUCTOR.toml');
+        assert.match(committed, /implement = "sol"/);
+        assert.match(committed, /feedback = \["mm","ds"\]/);
+        assert.equal(f.git('diff', '--', 'CONDUCTOR.toml'), '');
+        assert.equal(f.git('show', '--format=', '--name-only', 'HEAD'), 'CONDUCTOR.toml');
+        assert.match(diffs[1], /\+implement = "sol"/);
+        assert.match(diffs[1], /\+feedback = \["mm","ds"\]/);
+    } finally { await f.h.shutdown(); await restored?.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('discarding a second role edit preserves the first kept edit and it can be committed unchanged', async () => {
+    const f = setup([]);
+    f.store.state.task = undefined;
+    const file = join(f.project, 'CONDUCTOR.toml');
+    try {
+        f.chat.ask = async () => 'keep';
+        await f.h.rolesCommand('implement sol');
+        const kept = readFileSync(file, 'utf8');
+        f.chat.ask = async () => 'discard';
+        await f.h.rolesCommand('feedback mm ds');
+        assert.equal(readFileSync(file, 'utf8'), kept);
+        f.chat.ask = async () => 'commit';
+        await f.h.rolesCommand('implement sol');
+        assert.equal(f.git('show', 'HEAD:CONDUCTOR.toml'), kept.trim());
+        assert.equal(f.git('diff', '--', 'CONDUCTOR.toml'), '');
+    } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('swap defaults applies both sides atomically with commit, keep or discard', async () => {
+    for (const choice of ['commit', 'keep', 'discard']) {
+        const f = setup([]);
+        f.store.state.task = undefined;
+        const file = join(f.project, 'CONDUCTOR.toml');
+        const original = readFileSync(file, 'utf8');
+        let asks = 0;
+        f.chat.ask = async () => { asks++; return choice; };
+        try {
+            await f.h.swapCommand('kimi ds');
+            assert.equal(asks, 1);
+            const content = readFileSync(file, 'utf8');
+            if (choice === 'discard') assert.equal(content, original);
+            else {
+                assert.match(content, /implement = "ds"/);
+                assert.match(content, /feedback = \["kimi","glm","mm"\]/);
+            }
+            if (choice === 'commit') assert.equal(f.git('show', '--format=', '--name-only', 'HEAD'), 'CONDUCTOR.toml');
+            else assert.equal(f.git('log', '-1', '--format=%s'), 'Initial');
+            assert.equal(f.h.busy, null);
+        } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
+    }
+});
+
+test('swap refuses unfinished tasks and ambiguous assignments without modifying configuration', async () => {
+    const f = setup([]);
+    const file = join(f.project, 'CONDUCTOR.toml');
+    const original = readFileSync(file, 'utf8');
+    try {
+        await assert.rejects(f.h.swapCommand('kimi ds'), /task or session is still in progress/);
+        f.store.state.task = undefined;
+        await assert.rejects(f.h.swapCommand('kimi sol'), /exactly one role assignment/);
+        await assert.rejects(f.h.swapCommand('kimi'), /usage: \/swap/);
+        assert.equal(readFileSync(file, 'utf8'), original);
+        assert.equal(f.h.busy, null);
         assert.equal(f.prompts.length, 0);
     } finally { await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
 });
