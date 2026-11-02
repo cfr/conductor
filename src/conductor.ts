@@ -25,6 +25,7 @@ import * as repo from './repo.ts';
 import type { SessionRef, State, Store } from './state.ts';
 import { describeError, type Messenger } from './telegram.ts';
 import { defaultRoles, editRoleDefaults, onlyRoleChanges, swapRoleDefaults } from './roles.ts';
+import { AgentLimits } from './limits.ts';
 
 type Busy = Role | 'gate' | `/${string}` | null;
 
@@ -44,6 +45,7 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /summary [role] [agent] - an agent reads the running (or focused) session's log and sums it up
 /plan done - write the agreed items, then commit / keep / discard
 /agents - configured agent aliases and models
+/usage - live account quotas, reset times, and API balances
 /roles [role agents...] - show defaults or edit them while no task is in progress
 /swap <agent1> <agent2> - exchange two uniquely assigned role defaults
 /agent <alias> - hand off the current task's focused role; /continue to resume
@@ -80,6 +82,7 @@ export class Conductor {
     private startingCommands = new Set<string>();
     private shuttingDown = false;
     private jobs: Jobs;
+    private limits: AgentLimits;
     private local: LocalConfig;
     private store: Store;
     private chat: Messenger;
@@ -91,6 +94,7 @@ export class Conductor {
         this.project = loadProjectConfig(local.project);
         this.adapters = { opencode: new OpencodeAdapter(local.opencodeUrl), claude: new ClaudeAdapter(), codex: new CodexAdapter(join(dirname(local.stateFile), 'codex')) };
         this.jobs = new Jobs(join(dirname(local.stateFile), 'commands'));
+        this.limits = new AgentLimits(local.opencodeUrl);
         chat.command('help', async () => chat.send(this.help()));
         chat.command('start', async () => chat.send(this.help()));
         for (const c of this.project.commands) {
@@ -110,6 +114,7 @@ export class Conductor {
         chat.command('chat', (a) => this.chatCommand(a));
         chat.command('summary', (a) => this.summary(a));
         chat.command('agents', async () => { this.reload(); await chat.send(this.agentList()); });
+        chat.command('usage', (a) => this.usageCommand(a));
         chat.command('roles', (a) => this.rolesCommand(a));
         chat.command('swap', (a) => this.swapCommand(a));
         chat.command('agent', (a) => this.agentCommand(a));
@@ -1910,6 +1915,13 @@ export class Conductor {
             }
             throw e;
         } finally { this.busy = null; }
+    }
+
+    private async usageCommand(args: string) {
+        if (args) throw new Error('usage: /usage');
+        this.reload();
+        await this.chat.send('Checking account limits…');
+        await this.chat.send(await this.limits.read(this.project.agents.values()));
     }
 
     private agentList(): string {

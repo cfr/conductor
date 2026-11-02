@@ -139,6 +139,14 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
 - `/plan [agent] [topic]`, `/plan done`: a planning discussion (see below)
 - `/chat [new] [agent] <message>`, `/chat stop`, `/summary [role] [agent]`: see "Chat"
 - `/agents`: list configured agent aliases and models
+- `/usage`: read live account quota windows, reset times, and API balances independently of task
+  work. Group aliases by harness/provider and query each account once. Codex uses an account-only
+  app-server handshake with the managed CLI login; OpenCode provider readers reuse active exported
+  keys and query the provider directly. Bound subprocess and HTTP waits; concurrent commands share
+  a request, with fresh data on the next command. Omit missing periods, missing reset times, and
+  Claude Code agents. Show other unsupported/error states explicitly, isolate provider failures,
+  and never forward credentials or raw error payloads. No inference,
+  session mutation, persisted quota cache, or task-log entry is involved.
 - `/roles [role agents...]`: show defaults and current assignments, or edit one default in the
   tracked `CONDUCTOR.toml` when no task or session is in progress. Show the diff and offer
   commit / keep / discard; commits include only that config file. Scalar roles take one alias,

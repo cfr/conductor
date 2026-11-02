@@ -14,6 +14,7 @@ import type { Messenger } from '../src/telegram.ts';
 
 interface Harness {
     adapters: Record<AgentConfig['harness'], Adapter>;
+    limits: { read(agents: Iterable<AgentConfig>): Promise<string> };
     project: { gate: { name: string; cmd: string }[] };
     live: Map<string, AgentSession>;
     busy: string | null;
@@ -138,7 +139,8 @@ feedback_fix="Custom repair prompt: {findings}"
         resume(agent, id, opts) { return sessions.get(id) ?? makeSession(agent, id, opts); },
     };
     const noop = async () => {};
-    const chat: Messenger = { onText: noop, command() {}, send: async (text) => { sent.push(text); },
+    const commands = new Map<string, (args: string) => Promise<void>>();
+    const chat: Messenger = { onText: noop, command(name, handler) { commands.set(name, handler); }, send: async (text) => { sent.push(text); },
         sendMarkdown: noop, sendQuoted: noop, sendLog: noop, sendHtml: noop, sendFile: noop,
         ask: async () => 'keep', pendingQuestions: () => 0, takeOver: noop };
     const conductor = new Conductor(local, store, chat);
@@ -152,7 +154,7 @@ feedback_fix="Custom repair prompt: {findings}"
     store.state.sessions.implement = { id: implId, agent: 'kimi', title: '0170-task', startSha: base, checkedSha: base };
     store.state.lastGate = { ok: true, sha: base, at: '2026-10-29', commands: ['echo passed >> gate-count'] };
     store.save();
-    return { dir, project, local, store, chat, sessions, adapter, h, prompts, sent, git,
+    return { dir, project, local, store, chat, commands, sessions, adapter, h, prompts, sent, git,
         setImplementationReplies(replies: string[]) { implementationReplies = replies; },
         setReviewReplies(replies: string[]) { reviewReplies = replies; },
         setReviewFixReplies(replies: string[]) { reviewFixReplies = replies; },
@@ -1018,4 +1020,22 @@ test('shutdown prevents commands awaiting a Telegram announcement from launching
             assert.equal(existsSync(marker), false);
         } finally { release(); await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
     }
+});
+
+test('/usage routes independently of running task work and /agents keeps listing models', async () => {
+    const f = setup([]);
+    let reads = 0;
+    f.h.limits = { async read(agents) { reads++; assert.deepEqual([...agents].map((a) => a.name), ['kimi', 'ds', 'glm', 'mm', 'sol']); return 'Live account quotas'; } };
+    try {
+        f.h.busy = 'implement';
+        await f.commands.get('usage')!('');
+        assert.equal(reads, 1);
+        assert.ok(f.sent.includes('Live account quotas'));
+        assert.equal(f.h.busy, 'implement');
+        assert.equal(f.prompts.length, 0);
+        await f.commands.get('agents')!('');
+        assert.match(f.sent.at(-1)!, /kimi: kimi \(codex test-kimi\)/);
+        assert.equal(reads, 1);
+        await assert.rejects(f.commands.get('usage')!('unknown'), /usage: \/usage/);
+    } finally { f.h.busy = null; await f.h.shutdown(); rmSync(f.dir, { recursive: true, force: true }); }
 });

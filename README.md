@@ -136,6 +136,7 @@ literal `\n` sequences in quoted `-m` arguments. Earlier commits are not rewritt
 | `/status` | Show the task, running/pending work, sessions, and last gate. |
 | `/stop [chat\|plan]` | Interrupt the active agent; an explicit target stops only that chat or planner. |
 | `/agents` | List configured agent aliases and models. |
+| `/usage` | Read account quotas, reset times, and available API balances. |
 | `/roles` | Show configured role defaults and current task assignments. |
 | `/roles <role> <agents...>` | Edit role defaults while no task or session is in progress. |
 | `/swap <agent1> <agent2>` | Exchange two uniquely assigned role defaults. |
@@ -164,6 +165,35 @@ ordinary text keeps going to the task.
 Summaries use a fresh read-only session to read an exported log. They use `roles.summary`, default
 to the running session or otherwise the focused session, and do not disturb it. Summary sessions
 are not retained for later conversation.
+
+## Account usage
+
+`/usage` reads current account limits without starting a model turn. It works while a task runs,
+groups aliases sharing a provider account (for example, `sol terra luna`), and prints percentages
+used with reset countdowns. Repeated concurrent requests share one query;
+the next request fetches fresh values. It does not write quota snapshots to task logs.
+
+Supported readers:
+
+| Provider | Report |
+| --- | --- |
+| Codex | Every reported quota bucket, with window durations and reset times from the account API. |
+| GLM Coding Plan | Credit quota windows, typically five-hour and weekly. |
+| Kimi Coding Plan | Reported five-hour, weekly, and monthly total/code windows. |
+| MiniMax Coding Plan | Reported rolling and weekly percentages. |
+| DeepSeek | Prepaid balance in the account currency. |
+
+Only periods and reset times returned by the provider are shown. Claude Code agents are omitted.
+Other unsupported providers and failed queries say `unavailable`, while other providers still
+display their results. Kimi counters take priority over duplicate ratio fields
+that some gateways return as zero. Provider quota formats can change; unrecognized responses are
+reported as unavailable.
+
+OpenCode readers reuse active API-key credentials from `opencode auth export` against the
+configured service. Keys and raw error bodies are never included in the report. Codex uses its
+existing CLI login through the documented
+[`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt) method.
+No new login or configuration is needed when these credentials are already available.
 
 ## Project commands and aliases
 

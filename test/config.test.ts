@@ -79,10 +79,12 @@ aliases = ["server"]
     assert.throws(() => parseProjectConfig('/r', base + '[commands.roles]\ncmd = "x"\n'), /built-in/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.agent]\ncmd = "x"\n'), /built-in/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.swap]\ncmd = "x"\n'), /built-in/);
+    assert.throws(() => parseProjectConfig('/r', base + '[commands.usage]\ncmd = "x"\n'), /built-in/);
     assert.throws(() => parseProjectConfig('/r', base + '[commands.Deploy]\ncmd = "x"\n'), /lowercase/);
     assert.deepEqual(c.commands.map((x) => x.aliases), [[], ['server']]);
     assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["deploy"]')), /already taken/);
     assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["feedback"]')), /built-in/);
+    assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["usage"]')), /built-in/);
     assert.throws(() => parseProjectConfig('/r', base + extra.replace('["server"]', '["Srv"]')), /lowercase/);
 });
 
