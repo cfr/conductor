@@ -111,7 +111,9 @@ Planning discussion{topic}. You may read the repository, but edit only PLAN.md: 
 changes and no commits. Discuss with me first; I will say when to write the items down."""
 plan_done = """
 Please write the agreed items into PLAN.md now and commit only PLAN.md, following the \
-project's commit message rules."""
+project's commit message rules. Validation for PLAN.md-only planning changes: format/check PLAN.md \
+and inspect its diff. Do not run builds, test suites, or the full gate unless the user explicitly \
+requests them. General end-of-iteration gate instructions do not apply to this planning-only commit."""
 plan_read_only = """
 A task is running in this tree right now ({running}), so this turn is read-only: draft the \
 items in your reply instead of editing PLAN.md. They get written once the task is idle and \

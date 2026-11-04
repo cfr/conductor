@@ -315,6 +315,9 @@ in a few bullets. The summary session is one-off: not kept in state, not logged,
 `/plan [agent] [topic]` opens a session (default `roles.plan`) that may read the repo and edit
 only `PLAN.md` (no code). It commits on `/plan done`, or when asked to in plain text; the bridge
 handles both the same way. The conversation runs in the chat like any other session.
+Every planning turn carries explicit PLAN.md-only validation guidance, including continuations and
+custom prompts: format/check the Markdown and inspect its diff; builds, test suites and the full
+gate require an explicit user request. General end-of-iteration gate rules do not apply.
 `/plan done` asks the agent to write the agreed items into `PLAN.md` and commit it (the agent
 knows what changed and follows the project's commit rules); the bridge posts the commit message
 and diff, warns if the commit touches more than `PLAN.md`, and offers keep / undo commit (`git

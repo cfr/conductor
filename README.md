@@ -155,6 +155,9 @@ fallback; network failures are retried for about three minutes.
 Planning may read the repository and edit only `PLAN.md`. `/plan done` asks the agent to commit
 that file; conductor shows the changes, warns about other touched files, and offers keep/undo.
 `/plan stop` follows the same flow. `/stop plan` interrupts a running planner.
+Planning prompts explicitly limit PLAN.md-only validation to Markdown formatting/checking and diff
+inspection. Builds, test suites, and the full gate run only when explicitly requested, including
+when continuing an existing planning session or using custom project prompts.
 While task work or its gate is running, planning turns are read-only and `/plan done` waits.
 New commits are listed at the next planning turn so the planner can reread the plan. Planning
 survives `/next` and has its own session.

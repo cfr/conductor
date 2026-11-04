@@ -79,6 +79,10 @@ export interface LocalConfig {
     opencodeUrl: string;
 }
 
+export const planValidationGuidance = 'Validation for PLAN.md-only planning changes: format/check PLAN.md and inspect its diff. ' +
+    'Do not run builds, test suites, or the full gate unless the user explicitly requests them. ' +
+    'General end-of-iteration gate instructions do not apply to this planning-only commit.';
+
 const defaultPrompts: Prompts = {
     implement: 'please do {id}',
     review: 'please review {id}',
@@ -113,7 +117,7 @@ const defaultPrompts: Prompts = {
         'changes and no commits. Discuss with me first; I will say when to write the items down.',
     planDone:
         'Please write the agreed items into PLAN.md now and commit only PLAN.md, following the ' +
-        "project's commit message rules.",
+        "project's commit message rules. " + planValidationGuidance,
     planReadOnly:
         'A task is running in this tree right now ({running}), so this turn is read-only: draft the ' +
         'items in your reply instead of editing PLAN.md. They get written once the task is idle and ' +

@@ -8,6 +8,7 @@ import {
     fill,
     loadProjectConfig,
     parseProjectConfig,
+    planValidationGuidance,
     type AgentConfig,
     type LocalConfig,
     type ProjectCommand,
@@ -1160,6 +1161,7 @@ export class Conductor {
 
     // Read-only while a task runs, so the planner never edits PLAN.md under an implementer that moves its item.
     private async planTurn(text: string, doing: string, quote: boolean) {
+        if (!text.includes(planValidationGuidance)) text += `\n\n${planValidationGuidance}`;
         if (this.planBusy) {
             throw new Error('the planning session is answering; wait for it or /stop plan');
         }
