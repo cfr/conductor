@@ -43,7 +43,7 @@ const help = `/next [agent] [id] - start the next PLAN item (or a given one)
 /chat [new] [agent] <message> - read-only chat about the project, alongside running work
 /chat stop - close the chat session (its log stays)
 /summary [role] [agent] - an agent reads the running (or focused) session's log and sums it up
-/plan done - write the agreed items, then commit / keep / discard
+/plan done (or /plan stop) - write the agreed items, then commit / keep / discard
 /agents - configured agent aliases and models
 /usage - live account quotas, reset times, and API balances
 /roles [role agents...] - show defaults or edit them while no task is in progress
@@ -818,7 +818,7 @@ export class Conductor {
 
     private async plan(args: string) {
         this.reload();
-        if (args.trim() === 'done') {
+        if (['done', 'stop'].includes(args.trim())) {
             await this.planDone();
             return;
         }

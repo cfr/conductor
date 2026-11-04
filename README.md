@@ -130,6 +130,7 @@ literal `\n` sequences in quoted `-m` arguments. Earlier commits are not rewritt
 | `/todo [id]` | List Next items or show one in full, without an agent. |
 | `/plan [agent] [topic]` | Start or continue planning. |
 | `/plan done` | Write agreed items and commit `PLAN.md`. |
+| `/plan stop` | Alias for `/plan done`. |
 | `/chat [new] [agent] <message>` | Start or continue a separate read-only chat. |
 | `/chat stop` | Close that chat; its log stays. |
 | `/summary [role] [agent]` | Ask a fresh read-only session to summarize a session log. |
@@ -153,6 +154,7 @@ fallback; network failures are retried for about three minutes.
 
 Planning may read the repository and edit only `PLAN.md`. `/plan done` asks the agent to commit
 that file; conductor shows the changes, warns about other touched files, and offers keep/undo.
+`/plan stop` follows the same flow. `/stop plan` interrupts a running planner.
 While task work or its gate is running, planning turns are read-only and `/plan done` waits.
 New commits are listed at the next planning turn so the planner can reread the plan. Planning
 survives `/next` and has its own session.
@@ -179,7 +181,7 @@ Supported readers:
 | --- | --- |
 | Codex | Every reported quota bucket, with window durations and reset times from the account API. |
 | GLM Coding Plan | Credit quota windows, typically five-hour and weekly. |
-| Kimi Coding Plan | Reported five-hour, weekly, and monthly total/code windows. |
+| Kimi Coding Plan | Reported five-hour, weekly, and monthly windows (monthly uses the code quota). |
 | MiniMax Coding Plan | Reported rolling and weekly percentages. |
 | DeepSeek | Prepaid balance in the account currency. |
 
@@ -381,10 +383,23 @@ gaps and duplicates are counted separately from defect groups. Historical logs a
 
 Markdown token totals are rounded. `.usage.json` preserves exact reported counts and turn indices;
 `unmeteredTurns` marks missing usage data. Cached input is separate from uncached input, and output
-includes reasoning where reported by the harness. Codex supplies aggregate turn usage, so its
-model-step count and maximum single-request context are unavailable (`null` in JSON). Old saved
-Codex sessions receive this correction when resumed. Historical Markdown is not automatically
-rewritten.
+includes reasoning where reported by the harness. Codex reports cumulative thread counters on
+resume. Conductor subtracts the previous snapshot before recording each turn, preserving raw
+counters and marking the accounting as `thread-delta`. Counter resets start a new accounting
+epoch. Its model-step count and maximum single-request context remain unavailable (`null` in
+JSON). Turns without a completion record remain unmetered; a later cumulative delta can include
+intervening activity.
+
+Saved Codex sessions are normalized on resume and export. To rebuild historical saved usage,
+Markdown token lines, and sidecars, preview the changes with:
+
+```sh
+node tools/rebuild-codex-usage.ts --state-dir state/codex --logs ../project/wlog
+```
+
+Add `--write` to apply. The tool skips running sessions and logs whose content differs from saved
+transcripts, checks for concurrent file changes, and preserves other harnesses. Legacy counters
+reconstructed from saved usage are marked `rawReconstructed`.
 
 ## Codex permissions
 

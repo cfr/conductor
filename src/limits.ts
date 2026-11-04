@@ -112,7 +112,7 @@ export function parseKimiLimits(value: unknown): AccountLimits {
     }
     const ratios = object(data.usages);
     for (const [key, name] of [['limit_5h', '5-hour'], ['limit_7d', 'weekly'],
-        ['limit_month_total', 'monthly total'], ['limit_month_code', 'monthly code']]) {
+        ['limit_month_code', 'monthly']]) {
         if (windows.some((w) => w.name === name)) continue;
         const w = object(ratios[key]);
         const ratio = number(w.used_ratio);

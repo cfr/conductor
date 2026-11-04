@@ -4,9 +4,10 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from '
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { AgentConfig } from '../config.ts';
-import { emptyUsage, type Message, type Transcript } from '../logs/markdown.ts';
+import { type Message, type Transcript } from '../logs/markdown.ts';
 import type { Adapter, AgentSession, SessionOptions, TurnResult, TurnState } from './types.ts';
 import { groupAlive, killGroup } from '../jobs.ts';
+import { normalizeCodexUsage } from '../logs/codex-usage.ts';
 
 interface Saved {
     process?: { pid: number; birth: string };
@@ -79,6 +80,7 @@ class CodexSession implements AgentSession {
                 m.usageSource ??= { kind: 'codex-turn' };
             }
         }
+        normalizeCodexUsage(this.saved.transcript);
         this.persist();
     }
     private persist() {
@@ -140,10 +142,8 @@ class CodexSession implements AgentSession {
                     if (e.type === 'turn.completed') {
                         completed = true;
                         const u = e.usage ?? {};
-                        const cached = u.cached_input_tokens ?? 0;
-                        answer.usageSource = { kind: 'codex-turn', raw: u };
-                        answer.usage = { ...emptyUsage(), steps: 0, turns: 1, stepsKnown: false, maxContextKnown: false, input: Math.max(0, (u.input_tokens ?? 0) - cached),
-                            cacheRead: cached, output: u.output_tokens ?? 0, maxContext: 0 };
+                        answer.usageSource = { kind: 'codex-turn', raw: u, threadId: this.saved.thread };
+                        normalizeCodexUsage(this.saved.transcript);
                     }
                     if (e.type === 'turn.failed' || e.type === 'error') failure = e.error?.message ?? e.message ?? 'Codex failed';
                     this.persist();

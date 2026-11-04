@@ -18,7 +18,12 @@ test('Codex persists thread, resumes, exports tools and usage, and changes sandb
         writeFileSync(executable, `#!/bin/sh
 printf '%s\\n' "$@" > args.txt
 cat > /dev/null
-printf '%s\\n' '{"type":"thread.started","thread_id":"test-thread"}' '{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"files"}}' '{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}' '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20}}'
+n=0
+if test -f count.txt; then read n < count.txt; fi
+n=$((n + 1))
+printf '%s\\n' "$n" > count.txt
+printf '%s\\n' '{"type":"thread.started","thread_id":"test-thread"}' '{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"files"}}' '{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}'
+printf '{"type":"turn.completed","usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":%s}}\\n' "$((100 * n))" "$((40 * n))" "$((20 * n))"
 `, { mode: 0o700 });
         const opts = { title: 'Test', cwd: dir, asker };
         const adapter = new CodexAdapter(join(dir, 'sessions'), executable);

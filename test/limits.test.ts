@@ -19,7 +19,8 @@ const kimi = { limits: [{ window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' 
     detail: { limit: '100', used: '88', remaining: '12', resetTime: '2026-11-03T03:00:00.123456Z' } }],
     usage: { limit: '100', used: '29', resetTime: '2026-11-04T03:00:00Z' },
     usages: { limit_5h: { used_ratio: 0, reset_time: '2026-11-03T03:00:00Z' },
-        limit_7d: { used_ratio: 0 }, limit_month_total: { used_ratio: 0.0797, reset_time: '2026-12-02T00:00:00Z' } } };
+        limit_7d: { used_ratio: 0 }, limit_month_total: { used_ratio: 0.0797, reset_time: '2026-12-02T00:00:00Z' },
+        limit_month_code: { used_ratio: 0.05, reset_time: '2026-12-02T00:00:00Z' } } };
 const minimax = { base_resp: { status_code: 0 }, model_remains: [{ model_name: 'general',
     start_time: reset - 18000000, end_time: reset, weekly_start_time: reset - 604800000, weekly_end_time: reset,
     current_interval_total_count: 0, current_interval_usage_count: 0,
@@ -60,13 +61,13 @@ test('GLM credit counters give accurate usage rather than its rounded percentage
     assert.throws(() => parseZaiLimits({ success: false, code: 401, msg: 'private' }), /rejected/);
 });
 
-test('Kimi live counters override contradictory zero ratios and preserve monthly data', () => {
+test('Kimi live counters override zero ratios and label the code quota monthly without monthly total', () => {
     const limits = parseKimiLimits(kimi);
-    assert.deepEqual(limits.windows.map((w) => [w.name, Number(w.usedPercent.toFixed(2))]), [['5-hour', 88], ['weekly', 29], ['monthly total', 7.97]]);
+    assert.deepEqual(limits.windows.map((w) => [w.name, Number(w.usedPercent.toFixed(2))]), [['5-hour', 88], ['weekly', 29], ['monthly', 5]]);
     assert.equal(limits.windows[0].resetsAt, reset + 123);
     assert.equal(limits.windows[2].resetsAt, Date.parse('2026-12-02T00:00:00Z'));
     const monthly = parseKimiLimits({ usages: { limit_month_code: { used_ratio: 0 } } });
-    assert.deepEqual(monthly.windows, [{ name: 'monthly code', usedPercent: 0 }]);
+    assert.deepEqual(monthly.windows, [{ name: 'monthly', usedPercent: 0 }]);
 });
 
 test('MiniMax percentage fields work when counter totals are zero', () => {

@@ -136,7 +136,7 @@ review can turn into a discussion before `/fix`. Logs are exported throughout (s
   dispositions, final review or the pending-work barrier.
 - `/gate`: run the gate on the current session's commits by hand, then continue as after a turn
 - `/todo [id]`: list the `PLAN.md` "Next" items, or show one in full
-- `/plan [agent] [topic]`, `/plan done`: a planning discussion (see below)
+- `/plan [agent] [topic]`, `/plan done` (also `/plan stop`): a planning discussion (see below)
 - `/chat [new] [agent] <message>`, `/chat stop`, `/summary [role] [agent]`: see "Chat"
 - `/agents`: list configured agent aliases and models
 - `/usage`: read live account quota windows, reset times, and API balances independently of task
@@ -371,6 +371,11 @@ landed starts with `plan_moved` (their list), so the agent re-reads `PLAN.md` be
 ## Open questions
 
 None right now.
+
+Codex usage is the delta between successive raw cumulative thread counters, including across
+resume and conductor restarts. Exports normalize legacy records idempotently, retain raw snapshots
+and their provenance, and mark counter resets as new epochs. The historical rebuild tool updates
+idle saved sessions and matching log usage without changing transcript content.
 
 Codex uses `codex exec --json`, persists its thread id and event transcript beside conductor state,
 and uses `exec resume` for follow-up turns. Sandbox policy is set on every turn (read-only or

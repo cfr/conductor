@@ -1,3 +1,5 @@
+import { normalizeCodexUsage } from './codex-usage.ts';
+
 export type Part =
     | { kind: 'thinking'; text: string }
     | { kind: 'text'; text: string }
@@ -29,7 +31,8 @@ export interface Message {
     role: 'user' | 'assistant';
     parts: Part[];
     usage?: Usage;
-    usageSource?: { kind: 'codex-turn'; raw?: Record<string, number> };
+    usageSource?: { kind: 'codex-turn'; raw?: Record<string, number>; accounting?: 'thread-delta';
+        threadId?: string; counterReset?: boolean; rawReconstructed?: boolean };
 }
 
 export interface Transcript {
@@ -120,6 +123,7 @@ function clip(text: string, maxLines: number): string {
 }
 
 export function renderMarkdown(t: Transcript, maxToolOutputLines = 0): string {
+    normalizeCodexUsage(t);
     const total = emptyUsage();
     for (const m of t.messages) {
         if (m.usage) {
@@ -173,6 +177,7 @@ export function renderMarkdown(t: Transcript, maxToolOutputLines = 0): string {
 }
 
 export function usageMetadata(t: Transcript): unknown {
+    normalizeCodexUsage(t);
     let turn = 0;
     const entries: unknown[] = [];
     const total = emptyUsage();
